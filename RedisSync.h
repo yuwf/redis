@@ -10,6 +10,7 @@
 
 // 同步调用，不支持多线程 yuwf
 // 除了开启管道外，每个命令函数都支持原子性操作
+// 订阅命令不能和其他非订阅命令一起使用
 
 class RedisResult
 {
@@ -34,6 +35,7 @@ public:
 	int StringToInt() const;
 	float StringToFloat() const;
 	double StringToDouble() const;
+
 protected:
 	friend class RedisSync;
 	boost::any v;
@@ -47,175 +49,45 @@ public:
 	virtual ~RedisSync();
 public:
 	bool InitRedis(const std::string& ip, unsigned short port, const std::string& auth = "");
+	void Close();
 
 	// 返回false表示解析失败或者网络读取失败
 	bool Command(const std::string& cmd, RedisResult& rst);
 	bool Command(RedisResult& rst, const char* cmd, ...);
 
-	// 管道开启后 其他的命令函数都返回-1或者false
+	// 管道开启后 Command函数都false 其他辅助函数都返回-1
 	// Begin和Commit必须对称调用 返回值表示命令是否执行成功
 	bool PipelineBegin();
 	bool PipelineCommit();
 	bool PipelineCommit(RedisResult::Array& rst);
 
-	// 辅助接口 ==============================================
-
-	// DEL命令
-	// 返回值表示删除的个数 -1表示网络其他错误
-	// cnt 表示...参数的个数 参数类型必须是std::string
-	int Del(const std::string& key);
-	int Del(int cnt, ...);
-
-	// EXISTS和命令
-	// 返回1存在 0不存在 -1表示网络其他错误
-	int Exists(const std::string& key);
-
-	// 过期相关命令
-	// 返回1成功 0失败 -1表示网络其他错误
-	int Expire(const std::string& key, long long value);
-	int ExpireAt(const std::string& key, long long value);
-	int PExpire(const std::string& key, long long value);
-	int PExpireAt(const std::string& key, long long value);
-	int TTL(const std::string& key, long long& value);
-	int PTTL(const std::string& key, long long& value);
-
-	// SET命令 
-	// 返回1成功 0不成功 -1表示网络其他错误
-	int Set(const std::string& key, const std::string& value, unsigned int ex = -1, bool nx = false);
-	int Set(const std::string& key, int value, unsigned int ex = -1, bool nx = false);
-	int Set(const std::string& key, float value, unsigned int ex = -1, bool nx = false);
-	int Set(const std::string& key, double value, unsigned int ex = -1, bool nx = false);
-
-	// GET命令
-	// 返回1成功 0不成功 -1表示网络其他错误
-	int Get(const std::string& key, std::string& value);
-	int Get(const std::string& key, int& value);
-	int Get(const std::string& key, float& value);
-	int Get(const std::string& key, double& value);
-
-	// MSET命令
-	// 返回1成功 0不成功 -1表示网络其他错误
-	// cnt 表示...参数的个数/2 参数类型必须是std::string
-	int MSet(const std::map<std::string,std::string>& kvs);
-	int MSet(const std::map<std::string, int>& kvs);
-	int MSet(const std::map<std::string, float>& kvs);
-	int MSet(const std::map<std::string, double>& kvs);
-	int MSet(int cnt, ...);
-
-	// MGET命令
-	// 返回1成功 0不成功 -1表示网络其他错误
-	// 若成功 rst为数组 元素为string或者null
-	int MGet(const std::vector<std::string>& keys, RedisResult& rst);
-
-	// HSET命令
-	// 返回1成功 0不成功 -1表示网络其他错误
-	int HSet(const std::string& key, const std::string& field, const std::string& value);
-	int HSet(const std::string& key, const std::string& field, int value);
-	int HSet(const std::string& key, const std::string& field, float value);
-	int HSet(const std::string& key, const std::string& field, double value);
-
-	// HGET命令
-	// 返回1成功 0不成功 -1表示网络其他错误
-	int HGet(const std::string& key, const std::string& field, std::string& value);
-	int HGet(const std::string& key, const std::string& field, int& value);
-	int HGet(const std::string& key, const std::string& field, float& value);
-	int HGet(const std::string& key, const std::string& field, double& value);
-
-	// HLEN命令
-	// 返回列表长度 0不成功 -1表示网络其他错误
-	int HLen(const std::string& key);
-
-	// HEXISTS命令
-	// 返回1存在 0不存在 -1表示网络其他错误
-	int HExists(const std::string& key, const std::string& field);
-
-	// HEDL命令
-	// 返回值表示删除的个数 -1表示网络其他错误
-	// cnt 表示...参数的个数 参数类型必须是std::string
-	int HDel(const std::string& key, const std::string& field);
-	int HDel(const std::string& key, int cnt, ...);
-
-	// LPUSH命令
-	// 成功返回列表长度 0不成功 -1表示网络其他错误
-	// cnt 表示...参数的个数 参数类型必须是std::string
-	int LPush(const std::string& key, const std::string& value);
-	int LPush(const std::string& key, int value);
-	int LPush(const std::string& key, float value);
-	int LPush(const std::string& key, double value);
-	int LPush(const std::string& key, int cnt, ...);
-
-	// RPUSH命令
-	// 成功返回列表长度 0不成功 -1表示网络其他错误
-	// cnt 表示...参数的个数 参数类型必须是std::string
-	int RPush(const std::string& key, const std::string& value);
-	int RPush(const std::string& key, int value);
-	int RPush(const std::string& key, float value);
-	int RPush(const std::string& key, double value);
-	int RPush(const std::string& key, int cnt, ...);
-
-	// LPOP命令
-	// 1成功 0不成功 -1表示网络其他错误
-	// value表示移除的元素
-	int LPop(const std::string& key);
-	int LPop(const std::string& key, std::string& value);
-	int LPop(const std::string& key, int& value);
-	int LPop(const std::string& key, float& value);
-	int LPop(const std::string& key, double& value);
-
-	// RPOP命令
-	// 1成功 0不成功 -1表示网络其他错误
-	// value表示移除的元素
-	int RPop(const std::string& key);
-	int RPop(const std::string& key, std::string& value);
-	int RPop(const std::string& key, int& value);
-	int RPop(const std::string& key, float& value);
-	int RPop(const std::string& key, double& value);
-
-	// LRANGE命令
-	// 1成功 0不成功 -1表示网络其他错误
-	// 若成功 rst为数组 元素为string
-	int LRange(const std::string& key, int start, int stop, RedisResult& rst);
-
-	// LREM命令
-	// 成功返回移除元素的个数 0不成功 -1表示网络其他错误
-	// 若成功 rst为数组 元素为string
-	int LRem(const std::string& key, int count, std::string& value);
-
-	// LLEN命令
-	// 返回列表长度 0不成功 -1表示网络其他错误
-	int LLen(const std::string& key);
-
-	// SADD命令
-	// 成功返回添加的数量 0不成功 -1表示网络其他错误
-	// cnt 表示...参数的个数 参数类型必须是std::string
-	int SAdd(const std::string& key, const std::string& value);
-	int SAdd(const std::string& key, int value);
-	int SAdd(const std::string& key, float value);
-	int SAdd(const std::string& key, double value);
-	int SAdd(const std::string& key, int cnt, ...);
-
-	// SREM命令
-	// 成功返回移除元素的数量 0不成功 -1表示网络其他错误
-	// cnt 表示...参数的个数 参数类型必须是std::string
-	int SRem(const std::string& key, const std::string& value);
-	int SRem(const std::string& key, int value);
-	int SRem(const std::string& key, float value);
-	int SRem(const std::string& key, double value);
-	int SRem(const std::string& key, int cnt, ...);
+	// 因为订阅消息和请求消息是不对称的，这里只能把订阅功能写的尽量简单
+	// 订阅使用 开启订阅后，执行任何命令都直接返回false或者-1
+	// 返回false表示解析失败或者网络读取失败 返回true表示开启订阅
+	bool SubScribe(const std::string& channel);
+	bool SubScribe(int cnt, ...);
+	// 获取订阅的消息 block表示是否阻塞直到收到订阅消息
+	bool Message(std::string& channel, std::string& msg, bool block);
+	// 取消订阅
+	bool UnSubScribe();
 
 protected:
 	bool _Connect();
 	void _Close();
+	bool _CheckConnect();
 
 	// 返回false表示解析失败或者网络读取失败
 	bool _DoCommand(const std::vector<std::string>& buff, RedisResult& rst);
-	bool _DoCommand(RedisResult::Array& rst);
+	// 格式化命令
+	void _FormatCommand(const std::vector<std::string>& buff, std::stringstream &cmdbuff);
+	// 发送命令
+	bool _SendCommand(const std::string& cmdbuff);
 
 	// 读取并分析 buff表示读取的内容 pos表示解析到的位置
-	// 返回false表示解析失败或者网络读取失败
-	bool _ReadReply(RedisResult& rst, std::vector<char>& buff, int& pos);
+	// 返回值 -1 表示网络错误或者解析错误 0 表示未读取到 1 表示读取到了
+	int _ReadReply(RedisResult& rst, std::vector<char>& buff, int& pos);
 
-	// 返回值表示长度 -1表示网络读取失败
+	// 返回值表示长度 -1表示网络读取失败 0表示没有读取到 pos表示buff的起始位置
 	int _ReadByCRLF(std::vector<char>& buff, int pos);
 	int _ReadByLen(int len, std::vector<char>& buff, int pos);
 
@@ -226,29 +98,170 @@ protected:
 	std::string m_ip;
 	unsigned short m_port;
 	std::string m_auth;
+	int m_readouttime;	// 读取超时时间 毫秒 <0 无限等待 =0 不等待 >0 等n毫秒
 
-	bool m_pipeline; // 是否开启管道
-	std::stringstream m_cmdbuff;
-	int m_cmdcount;
+	// 开启管道使用
+	bool m_pipeline;
+	std::stringstream m_pipecmdbuff;
+	int m_pipecmdcount;
 
-	// 缓存命令清理辅助
-	class BuffClearHelper
-	{
-	public:
-		BuffClearHelper(RedisSync& redis) : m_redis(redis)
-		{
-		}
-		~BuffClearHelper()
-		{
-			if (!m_redis.m_pipeline) // 没有开启管道，清除buff
-			{
-				m_redis.m_cmdbuff.str("");
-				m_redis.m_cmdcount = 0;
-			}
-		}
-	protected:
-		RedisSync& m_redis;
-	};
+	// 订阅使用
+	bool m_subscribe;
+	std::vector<char> m_submsgbuff;
+
+private:
+	// 禁止拷贝
+	RedisSync(const RedisSync&) = delete;
+	RedisSync& operator=(const RedisSync&) = delete;
+
+public:
+	// 辅助类接口==================================================
+	// 注 ：
+	// 管道开启后 命令会缓存起来 下面的函数都返回-1
+	// 开启订阅后下面的函数直接返回-1
+
+	// DEL命令
+	// 返回值表示删除的个数 -1表示网络或者其他错误
+	// cnt 表示...参数的个数 参数类型必须是C样式的字符串char*
+	int Del(const std::string& key);
+	int Del(int cnt, ...);
+
+	// EXISTS和命令
+	// 返回1存在 0不存在 -1表示网络或者其他错误
+	int Exists(const std::string& key);
+
+	// 过期相关命令
+	// 返回1成功 0失败 -1表示网络或其他错误
+	int Expire(const std::string& key, long long value);
+	int ExpireAt(const std::string& key, long long value);
+	int PExpire(const std::string& key, long long value);
+	int PExpireAt(const std::string& key, long long value);
+	int TTL(const std::string& key, long long& value);
+	int PTTL(const std::string& key, long long& value);
+
+	// SET命令 
+	// 返回1成功 0不成功 -1表示网络或其他错误
+	int Set(const std::string& key, const std::string& value, unsigned int ex = -1, bool nx = false);
+	int Set(const std::string& key, int value, unsigned int ex = -1, bool nx = false);
+	int Set(const std::string& key, float value, unsigned int ex = -1, bool nx = false);
+	int Set(const std::string& key, double value, unsigned int ex = -1, bool nx = false);
+
+	// GET命令
+	// 返回1成功 0不成功 -1表示网络或其他错误
+	int Get(const std::string& key, std::string& value);
+	int Get(const std::string& key, int& value);
+	int Get(const std::string& key, float& value);
+	int Get(const std::string& key, double& value);
+
+	// MSET命令
+	// 返回1成功 0不成功 -1表示网络或其他错误
+	// cnt 表示...参数的个数/2 参数类型必须是C样式的字符串char*
+	int MSet(const std::map<std::string, std::string>& kvs);
+	int MSet(const std::map<std::string, int>& kvs);
+	int MSet(const std::map<std::string, float>& kvs);
+	int MSet(const std::map<std::string, double>& kvs);
+	int MSet(int cnt, ...);
+
+	// MGET命令
+	// 返回1成功 0不成功 -1表示网络或其他错误
+	// 若成功 rst为数组 元素为string或者null
+	int MGet(const std::vector<std::string>& keys, RedisResult& rst);
+
+	// HSET命令
+	// 返回1成功 0不成功 -1表示网络或其他错误
+	int HSet(const std::string& key, const std::string& field, const std::string& value);
+	int HSet(const std::string& key, const std::string& field, int value);
+	int HSet(const std::string& key, const std::string& field, float value);
+	int HSet(const std::string& key, const std::string& field, double value);
+
+	// HGET命令
+	// 返回1成功 0不成功 -1表示网络或其他错误
+	int HGet(const std::string& key, const std::string& field, std::string& value);
+	int HGet(const std::string& key, const std::string& field, int& value);
+	int HGet(const std::string& key, const std::string& field, float& value);
+	int HGet(const std::string& key, const std::string& field, double& value);
+
+	// HLEN命令
+	// 返回列表长度 0不成功 -1表示网络或其他错误
+	int HLen(const std::string& key);
+
+	// HEXISTS命令
+	// 返回1存在 0不存在 -1表示网络或其他错误
+	int HExists(const std::string& key, const std::string& field);
+
+	// HEDL命令
+	// 返回值表示删除的个数 -1表示网络或其他错误
+	// cnt 表示...参数的个数 参数类型必须是C样式的字符串char*
+	int HDel(const std::string& key, const std::string& field);
+	int HDel(const std::string& key, int cnt, ...);
+
+	// LPUSH命令
+	// 成功返回列表长度 0不成功 -1表示网络或其他错误
+	// cnt 表示...参数的个数 参数类型必须是C样式的字符串char*
+	int LPush(const std::string& key, const std::string& value);
+	int LPush(const std::string& key, int value);
+	int LPush(const std::string& key, float value);
+	int LPush(const std::string& key, double value);
+	int LPush(const std::string& key, int cnt, ...);
+
+	// RPUSH命令
+	// 成功返回列表长度 0不成功 -1表示网络或其他错误
+	// cnt 表示...参数的个数 参数类型必须是C样式的字符串char*
+	int RPush(const std::string& key, const std::string& value);
+	int RPush(const std::string& key, int value);
+	int RPush(const std::string& key, float value);
+	int RPush(const std::string& key, double value);
+	int RPush(const std::string& key, int cnt, ...);
+
+	// LPOP命令
+	// 1成功 0不成功 -1表示网络或其他错误
+	// value表示移除的元素
+	int LPop(const std::string& key);
+	int LPop(const std::string& key, std::string& value);
+	int LPop(const std::string& key, int& value);
+	int LPop(const std::string& key, float& value);
+	int LPop(const std::string& key, double& value);
+
+	// RPOP命令
+	// 1成功 0不成功 -1表示网络或其他错误
+	// value表示移除的元素
+	int RPop(const std::string& key);
+	int RPop(const std::string& key, std::string& value);
+	int RPop(const std::string& key, int& value);
+	int RPop(const std::string& key, float& value);
+	int RPop(const std::string& key, double& value);
+
+	// LRANGE命令
+	// 1成功 0不成功 -1表示网络或其他错误
+	// 若成功 rst为数组 元素为string
+	int LRange(const std::string& key, int start, int stop, RedisResult& rst);
+
+	// LREM命令
+	// 成功返回移除元素的个数 0不成功 -1表示网络或其他错误
+	// 若成功 rst为数组 元素为string
+	int LRem(const std::string& key, int count, std::string& value);
+
+	// LLEN命令
+	// 返回列表长度 0不成功 -1表示网络或其他错误
+	int LLen(const std::string& key);
+
+	// SADD命令
+	// 成功返回添加的数量 0不成功 -1表示网络或其他错误
+	// cnt 表示...参数的个数 参数类型必须是C样式的字符串char*
+	int SAdd(const std::string& key, const std::string& value);
+	int SAdd(const std::string& key, int value);
+	int SAdd(const std::string& key, float value);
+	int SAdd(const std::string& key, double value);
+	int SAdd(const std::string& key, int cnt, ...);
+
+	// SREM命令
+	// 成功返回移除元素的数量 0不成功 -1表示网络或其他错误
+	// cnt 表示...参数的个数 参数类型必须是C样式的字符串char*
+	int SRem(const std::string& key, const std::string& value);
+	int SRem(const std::string& key, int value);
+	int SRem(const std::string& key, float value);
+	int SRem(const std::string& key, double value);
+	int SRem(const std::string& key, int cnt, ...);
 };
 
 #endif

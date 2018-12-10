@@ -105,7 +105,8 @@ RedisSync::RedisSync() : m_socket(m_ioservice)
 	m_ip = "";
 	m_port = 0;
 	m_pipeline = false;
-	m_cmdcount = 0;
+	m_pipecmdcount = 0;
+	m_subscribe = false;
 }
 
 RedisSync::~RedisSync()
@@ -126,7 +127,11 @@ bool RedisSync::InitRedis(const std::string& ip, unsigned short port, const std:
 	m_auth = auth;
 
 	m_pipeline = false;
-	m_cmdbuff.clear();
+	m_pipecmdbuff.str("");
+	m_pipecmdcount = 0;
+
+	m_subscribe = false;
+	m_submsgbuff.clear();
 
 	if (!_Connect())
 	{
@@ -136,6 +141,11 @@ bool RedisSync::InitRedis(const std::string& ip, unsigned short port, const std:
 		return false;
 	}
 	return true;
+}
+
+void RedisSync::Close()
+{
+	_Close();
 }
 
 bool RedisSync::Command(const std::string& cmd, RedisResult& rst)
@@ -215,6 +225,396 @@ bool RedisSync::Command(RedisResult& rst, const char* cmd, ...)
 
 bool RedisSync::PipelineBegin()
 {
+	if (m_subscribe)
+	{
+		LogError("SubScribe Running");
+		return false;
+	}
+
+	if (!_CheckConnect())
+	{
+		return false;
+	}
+
+	m_pipeline = true;
+	m_pipecmdbuff.str("");
+	m_pipecmdcount = 0;
+	return true;
+}
+
+bool RedisSync::PipelineCommit()
+{
+	RedisResult::Array rst;
+	return PipelineCommit(rst);
+}
+
+bool RedisSync::PipelineCommit(RedisResult::Array& rst)
+{
+	if (m_subscribe)
+	{
+		LogError("SubScribe Running");
+		return false;
+	}
+
+	if (!m_pipeline)
+	{
+		LogError("Not Open Pipeline");
+		return false;
+	}
+	
+	std::string cmdbuff = move(m_pipecmdbuff.str());
+	int cmdcount = m_pipecmdcount;
+
+	m_pipeline = false;
+	m_pipecmdbuff.str("");
+	m_pipecmdcount = 0;
+
+	if (!_SendCommand(cmdbuff))
+	{
+		return false;
+	}
+
+	std::vector<char> readbuff;
+	readbuff.reserve(512);
+	int pos = 0;
+	for (int i = 0; i < cmdcount; ++i)
+	{
+		rst.push_back(RedisResult());
+		RedisResult& rst2 = rst.back();
+		if (_ReadReply(rst2, readbuff, pos) != 1)
+		{
+			_Close();
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool RedisSync::SubScribe(const std::string& channel)
+{
+	if (m_subscribe)
+	{
+		LogError("SubScribe Running, Only Open Once SubScribe");
+		return false;
+	}
+	std::vector<std::string> buff;
+	buff.push_back("SUBSCRIBE");
+	buff.push_back(channel);
+
+	// 命令写入buff
+	std::stringstream cmdbuff;
+	_FormatCommand(buff, cmdbuff);
+
+	if (!_SendCommand(cmdbuff.str()))
+	{
+		return false;
+	}
+
+	std::vector<char> readbuff; // 注意这个readbuff可能已经包含了订阅消息
+	int pos = 0;
+	RedisResult rst;
+	if (_ReadReply(rst, readbuff, pos) != 1)
+	{
+		_Close();
+		return false;
+	}
+	// 判断是否监听成功
+	if (!rst.IsArray())
+	{
+		LogError("UnKnown Error");
+		return false;
+	}
+	auto rstarray = rst.ToArray();
+	if (rstarray.size() < 3 || !rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsInt())
+	{
+		LogError("UnKnown Error");
+		return false;
+	}
+	if (rstarray[0].ToString() != "subscribe" || rstarray[1].ToString() != channel)
+	{
+		LogError("UnKnown Error");
+		return false;
+	}
+
+	m_subscribe = true;
+	// 多余未分析的buffer
+	m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
+
+	return true;
+}
+
+bool RedisSync::SubScribe(int cnt, ...)
+{
+	if (m_subscribe)
+	{
+		LogError("SubScribe Running, Only Open Once SubScribe");
+		return false;
+	}
+	if ( cnt <= 0 )
+	{
+		LogError("SubScribe channel count must > 0");
+		return false;
+	}
+	std::vector<std::string> buff;
+	buff.push_back("SUBSCRIBE");
+
+	va_list ap;
+	va_start(ap, cnt);
+	for (int i = 0; i < cnt; ++i)
+	{
+		buff.push_back(va_arg(ap, const char*));
+	}
+	va_end(ap);
+
+	// 命令写入buff
+	std::stringstream cmdbuff;
+	_FormatCommand(buff, cmdbuff);
+
+	if (!_SendCommand(cmdbuff.str()))
+	{
+		return false;
+	}
+
+	for (int i = 0; i < cnt; ++i)
+	{
+		std::vector<char> readbuff;
+		readbuff.swap(m_submsgbuff);
+		int pos = 0;
+		RedisResult rst;
+		if (_ReadReply(rst, readbuff, pos) != 1)
+		{
+			_Close();
+			return false;
+		}
+		// 判断是否监听成功
+		if (!rst.IsArray())
+		{
+			LogError("UnKnown Error");
+			return false;
+		}
+		auto rstarray = rst.ToArray();
+		if (rstarray.size() < 3 || !rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsInt())
+		{
+			LogError("UnKnown Error");
+			return false;
+		}
+		if (rstarray[0].ToString() != "subscribe" || rstarray[1].ToString() != buff[i+1])
+		{
+			LogError("UnKnown Error");
+			return false;
+		}
+
+		// 多余未分析的buffer
+		m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
+	}
+	
+	m_subscribe = true;
+
+	return true;
+}
+
+bool RedisSync::Message(std::string& channel, std::string& msg, bool block)
+{
+	if (!m_subscribe)
+	{
+		LogError("SubScribe Not Call");
+		return false;
+	}
+
+	boost::system::error_code ec;
+	m_socket.io_control(boost::asio::ip::tcp::socket::non_blocking_io(!block), ec);
+
+	std::vector<char> readbuff;
+	readbuff.swap(m_submsgbuff);
+	int pos = 0;
+	RedisResult value;
+	if (_ReadReply(value, readbuff, pos) != 1)
+	{
+		m_submsgbuff.swap(readbuff);
+		return false;
+	}
+
+	// 保存未分析的数据
+	m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
+
+	// 判断数据类型
+	if (!value.IsArray())
+	{
+		LogError("UnKnown Error");
+		return false;
+	}
+	auto rstarray = value.ToArray();
+	if (rstarray.size() < 3 || !rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsString())
+	{
+		LogError("UnKnown Error");
+		return false;
+	}
+	if (rstarray[0].ToString() != "message")
+	{
+		LogError("UnKnown Error");
+		return false;
+	}
+	channel = rstarray[1].ToString();
+	msg = rstarray[2].ToString();
+
+	return true;
+}
+
+bool RedisSync::UnSubScribe()
+{
+	if (!m_subscribe)
+	{
+		LogError("SubScribe Not Call");
+		return false;
+	}
+
+	boost::system::error_code ec;
+	m_socket.io_control(boost::asio::ip::tcp::socket::non_blocking_io(false), ec);
+
+	std::vector<std::string> buff;
+	buff.push_back("UNSUBSCRIBE");
+
+	// 命令写入buff
+	std::stringstream cmdbuff;
+	_FormatCommand(buff, cmdbuff);
+
+	if (!_SendCommand(cmdbuff.str()))
+	{
+		return false;
+	}
+
+	do 
+	{
+		std::vector<char> readbuff;
+		readbuff.swap(m_submsgbuff);
+		int pos = 0;
+		RedisResult value;
+		if (_ReadReply(value, readbuff, pos) != 1)
+		{
+			_Close();
+			return false;
+		}
+
+		// 保存未分析的数据
+		m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
+
+		// 判断数据类型
+		if (!value.IsArray())
+		{
+			LogError("UnKnown Error");
+			return false;
+		}
+		auto rstarray = value.ToArray();
+		if (rstarray.size() < 3 || !rstarray[0].IsString() || !rstarray[2].IsInt())
+		{
+			LogError("UnKnown Error");
+			return false;
+		}
+
+		if (rstarray[0].ToString() == "message")
+		{
+			// 未处理的订阅消息
+			continue;
+		}
+		else if (rstarray[0].ToString() == "unsubscribe")
+		{
+			if (rstarray[2].ToInt() == 0)
+			{
+				break;
+			}
+		}
+		else
+		{
+			// 什么情况
+			LogError("UnKnown Error");
+			return false;
+		}
+	} while (true);
+
+	m_subscribe = false;
+	return true;
+}
+
+bool RedisSync::_Connect()
+{
+	_Close();
+
+	boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::address::from_string(m_ip), m_port);
+	boost::system::error_code ec;
+	m_socket.open(endpoint.protocol(), ec);
+	if (ec)
+	{
+		LogError("RedisSync Open Fail, ip=%s port=%d", m_ip.c_str(), (int)m_port);
+		return false;
+	}
+
+	m_socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
+	m_socket.set_option(boost::asio::socket_base::keep_alive(true), ec);
+	m_socket.io_control(boost::asio::ip::tcp::socket::non_blocking_io(false), ec);
+
+	m_socket.connect(endpoint, ec);
+	if (ec)
+	{
+		LogError("RedisSync Connect Fail, ip=%s port=%d", m_ip.c_str(), (int)m_port);
+		return false;
+	}
+
+	// 密码或者测试连接
+	std::vector<std::string> buff;
+	if (!m_auth.empty())
+	{
+		buff.push_back("AUTH");
+		buff.push_back(m_auth);
+	}
+	else
+	{
+		buff.push_back("PING");
+	}
+
+	std::stringstream cmdbuff;
+	_FormatCommand(buff, cmdbuff);
+	
+	boost::asio::write(m_socket, boost::asio::buffer(cmdbuff.str()), boost::asio::transfer_all(), ec);
+	if (ec)
+	{
+		LogError("RedisSync Write Error, %s", ec.message().c_str());
+		return false;
+	}
+
+	RedisResult rst;
+	std::vector<char> readbuff;
+	int pos = 0;
+	if (_ReadReply(rst, readbuff, pos) != 1)
+	{
+		return false;
+	}
+	if (rst.IsNull() || rst.IsError())
+	{
+		LogError("RedisSync Auth Error, %s", m_auth.c_str());
+		return false;
+	}
+
+	LogError("RedisSync Connect Success, ip=%s port=%d", m_ip.c_str(), (int)m_port);
+	m_bconnected = true;
+	return true;
+}
+
+void RedisSync::_Close()
+{
+	boost::system::error_code ec;
+	if (m_socket.is_open())
+	{
+		m_socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+		m_socket.close(ec);
+	}
+	m_bconnected = false;
+	m_subscribe = false; // 断开连接订阅肯定就不能用了
+}
+
+bool RedisSync::_CheckConnect()
+{
+	// 如果没有连接先尝试连接下
 	if (!m_bconnected)
 	{
 		// 如果ip不为空 重新连接下
@@ -231,42 +631,255 @@ bool RedisSync::PipelineBegin()
 			return false;
 		}
 	}
-
-	m_pipeline = true;
 	return true;
 }
 
-bool RedisSync::PipelineCommit()
+bool RedisSync::_DoCommand(const std::vector<std::string>& buff, RedisResult& rst)
 {
-	if (!m_pipeline)
+	if (m_subscribe)
 	{
-		LogError("Not Open Pipeline");
+		LogError("SubScribe Running");
 		return false;
 	}
-	m_pipeline = false;
-	RedisResult::Array rst;
-	if (!_DoCommand(rst))
+
+	if (m_pipeline)
 	{
+		// 开启了管道 命令写入管道buff
+		_FormatCommand(buff, m_pipecmdbuff);
+		m_pipecmdcount++;
+		return false;
+	}
+	
+	std::stringstream cmdbuff;
+	_FormatCommand(buff, cmdbuff);
+
+	if (!_SendCommand(cmdbuff.str()))
+	{
+		return false;
+	}
+
+	std::vector<char> readbuff;
+	readbuff.reserve(512);
+	int pos = 0;
+	if (_ReadReply(rst, readbuff, pos) != 1)
+	{
+		_Close();
 		return false;
 	}
 	return true;
 }
 
-bool RedisSync::PipelineCommit(RedisResult::Array& rst)
+void RedisSync::_FormatCommand(const std::vector<std::string>& buff, std::stringstream &cmdbuff)
 {
-	if (!m_pipeline)
+	cmdbuff << "*" << buff.size() << "\r\n";
+	for (auto it = buff.begin(); it != buff.end(); ++it)
 	{
-		LogError("Not Open Pipeline");
+		cmdbuff << "$" << it->size() << "\r\n" << *it << "\r\n";
+	}
+}
+
+bool RedisSync::_SendCommand(const std::string& cmdbuff)
+{
+	if (!_CheckConnect())
+	{
 		return false;
 	}
-	m_pipeline = false;
-	if (!_DoCommand(rst))
+
+	boost::system::error_code ec;
+	boost::asio::write(m_socket, boost::asio::buffer(cmdbuff), boost::asio::transfer_all(), ec);
+	if (ec)
 	{
-		return false;
+		// 尝试连接下
+		if (!_Connect())
+		{
+			return false;
+		}
+		boost::asio::write(m_socket, boost::asio::buffer(cmdbuff), boost::asio::transfer_all(), ec);
+		if (ec)
+		{
+			LogError("RedisSync Write Error, %s", ec.message().c_str());
+			return false;
+		}
 	}
 	return true;
 }
 
+int RedisSync::_ReadReply(RedisResult& rst, std::vector<char>& buff, int& pos)
+{
+	int len = _ReadByCRLF(buff,pos);
+	if (len <= 0)
+	{
+		return len;
+	}
+
+	char type = buff[pos];
+	len -= 1;
+	pos += 1;
+	switch (type)
+	{
+		case '+':
+		{
+			rst.v = std::string(&buff[pos], &buff[pos + len]);
+
+			pos += len;
+			pos += 2; // \r\n
+			break;
+		}
+		case '-':
+		{
+			rst.v = std::string(&buff[pos], &buff[pos + len]);
+			rst.error = true;
+			LogError("Redis %s", rst.ToString().c_str());
+
+			pos += len;
+			pos += 2; // \r\n
+			break;
+		}
+		case ':':
+		{
+			buff[pos + len] = '\0';
+			char* p = &buff[pos];
+			rst.v = atoll(p);
+			buff[pos + len] = '\r';
+
+			pos += len;
+			pos += 2; // \r\n
+			break;
+		}
+		case '$':
+		{
+			buff[pos + len] = '\0';
+			char* p = &buff[pos];
+			int strlen = atoi(p);
+			buff[pos + len] = '\r';
+
+			pos += len;
+			pos += 2; // \r\n
+
+			if (strlen < 0)
+			{
+				// nil
+			}
+			else if (strlen == 0)
+			{
+				rst.v = std::string("");
+				pos += 2; // \r\n
+			}
+			else
+			{
+				int len = _ReadByLen(strlen, buff, pos);
+				if (len < 0)
+				{
+					return len;
+				}
+
+				rst.v = std::string(&buff[pos], &buff[pos + len]);
+
+				pos += len;
+				pos += 2; // \r\n
+			}
+			break;
+		}
+		case '*':
+		{
+			buff[pos + len] = '\0';
+			char* p = &buff[pos];
+			int size = atoi(p);
+			buff[pos + len] = '\r';
+
+			pos += len;
+			pos += 2; // \r\n
+
+			rst.v = RedisResult::Array();
+			RedisResult::Array* pArray = boost::any_cast<RedisResult::Array >(&rst.v);
+			for (int i =0; i < size; ++i)
+			{
+				RedisResult rst2;
+				if (_ReadReply(rst2, buff, pos) != 1)
+				{
+					return -1;
+				}
+				pArray->push_back(rst2);
+			}
+			break;
+		}
+		default:
+		{
+			return -1;
+		}
+	}
+	
+	return 1;
+}
+
+int RedisSync::_ReadByCRLF(std::vector<char>& buff, int pos)
+{
+	do 
+	{
+		for (int i = pos; i < (int)buff.size()-1; ++i)
+		{
+			if (memcmp(&buff[i], "\r\n", 2) == 0)
+			{
+				return i- pos;
+			}
+		}
+
+		boost::array<char, 512> inbuff;
+		boost::system::error_code ec;
+		size_t size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
+		if (ec)
+		{
+			if (ec == boost::asio::error::would_block)
+			{
+				// 非阻塞socket
+				return 0;
+			}
+			LogError("RedisSync Read Error, %s", ec.message().c_str());
+			return -1;
+		}
+		if ( size > 0 )
+		{
+			buff.insert(buff.end(), inbuff.begin(), inbuff.begin() + size);
+			continue;
+		}
+		break;
+	} while (true);
+
+	return 0;
+}
+
+int RedisSync::_ReadByLen(int len, std::vector<char>& buff, int pos)
+{
+	do
+	{
+		if ((int)buff.size()- pos >= len)
+		{
+			return len;
+		}
+
+		boost::array<char, 512> inbuff;
+		boost::system::error_code ec;
+		size_t size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
+		if (ec)
+		{
+			if (ec == boost::asio::error::would_block)
+			{
+				// 非阻塞socket
+				return 0;
+			}
+			LogError("RedisSync Read Error, %s", ec.message().c_str());
+			return -1;
+		}
+		if (size > 0)
+		{
+			buff.insert(buff.end(), inbuff.begin(), inbuff.begin() + size);
+			continue;
+		}
+		break;
+	} while (true);
+
+	return 0;
+}
 
 int RedisSync::Del(const std::string& key)
 {
@@ -275,15 +888,15 @@ int RedisSync::Del(const std::string& key)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff,rst))
+	if (!_DoCommand(buff, rst))
 	{
 		return -1;
 	}
-	if ( rst.IsError() )
+	if (rst.IsError())
 	{
 		return 0;
 	}
-	if ( rst.IsInt() )
+	if (rst.IsInt())
 	{
 		return rst.ToInt();
 	}
@@ -300,7 +913,7 @@ int RedisSync::Del(int cnt, ...)
 	va_start(ap, cnt);
 	for (int i = 0; i < cnt; ++i)
 	{
-		buff.push_back(va_arg(ap, std::string) );
+		buff.push_back(va_arg(ap, const char*));
 	}
 	va_end(ap);
 
@@ -458,7 +1071,7 @@ int RedisSync::TTL(const std::string& key, long long& value)
 	if (rst.IsInt())
 	{
 		value = rst.ToLongLong();
-		return true;
+		return 1;
 	}
 	LogError("UnKnown Error");
 	return 0;
@@ -482,7 +1095,7 @@ int RedisSync::PTTL(const std::string& key, long long& value)
 	if (rst.IsInt())
 	{
 		value = rst.ToLongLong();
-		return true;
+		return 1;
 	}
 	LogError("UnKnown Error");
 	return 0;
@@ -544,7 +1157,7 @@ int RedisSync::Get(const std::string& key, std::string& value)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff,rst))
+	if (!_DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -571,7 +1184,7 @@ int RedisSync::Get(const std::string& key, int& value)
 {
 	std::string rst;
 	int r = Get(key, rst);
-	if ( r != 1 )
+	if (r != 1)
 	{
 		return r;
 	}
@@ -724,8 +1337,8 @@ int RedisSync::MSet(int cnt, ...)
 	va_start(ap, cnt);
 	for (int i = 0; i < cnt; ++i)
 	{
-		buff.push_back(va_arg(ap, std::string));
-		buff.push_back(va_arg(ap, std::string));
+		buff.push_back(va_arg(ap, const char*));
+		buff.push_back(va_arg(ap, const char*));
 	}
 	va_end(ap);
 
@@ -968,7 +1581,7 @@ int RedisSync::HDel(const std::string& key, int cnt, ...)
 	va_start(ap, cnt);
 	for (int i = 0; i < cnt; ++i)
 	{
-		buff.push_back(va_arg(ap, std::string));
+		buff.push_back(va_arg(ap, const char*));
 	}
 	va_end(ap);
 
@@ -1038,7 +1651,7 @@ int RedisSync::LPush(const std::string& key, int cnt, ...)
 	va_start(ap, cnt);
 	for (int i = 0; i < cnt; ++i)
 	{
-		buff.push_back(va_arg(ap, std::string));
+		buff.push_back(va_arg(ap, const char*));
 	}
 	va_end(ap);
 
@@ -1108,7 +1721,7 @@ int RedisSync::RPush(const std::string& key, int cnt, ...)
 	va_start(ap, cnt);
 	for (int i = 0; i < cnt; ++i)
 	{
-		buff.push_back(va_arg(ap, std::string));
+		buff.push_back(va_arg(ap, const char*));
 	}
 	va_end(ap);
 
@@ -1394,7 +2007,7 @@ int RedisSync::SAdd(const std::string& key, int cnt, ...)
 	va_start(ap, cnt);
 	for (int i = 0; i < cnt; ++i)
 	{
-		buff.push_back(va_arg(ap, std::string));
+		buff.push_back(va_arg(ap, const char*));
 	}
 	va_end(ap);
 
@@ -1464,7 +2077,7 @@ int RedisSync::SRem(const std::string& key, int cnt, ...)
 	va_start(ap, cnt);
 	for (int i = 0; i < cnt; ++i)
 	{
-		buff.push_back(va_arg(ap, std::string));
+		buff.push_back(va_arg(ap, const char*));
 	}
 	va_end(ap);
 
@@ -1483,361 +2096,4 @@ int RedisSync::SRem(const std::string& key, int cnt, ...)
 	}
 	LogError("UnKnown Error");
 	return 0;
-}
-
-bool RedisSync::_Connect()
-{
-	_Close();
-
-	boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::address::from_string(m_ip), m_port);
-	boost::system::error_code ec;
-	m_socket.open(endpoint.protocol(), ec);
-	if (ec)
-	{
-		LogError("RedisSync Open Fail, ip=%s port=%d", m_ip.c_str(), (int)m_port);
-		return false;
-	}
-
-	m_socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
-	m_socket.set_option(boost::asio::socket_base::keep_alive(true), ec);
-
-	m_socket.connect(endpoint, ec);
-	if (ec)
-	{
-		LogError("RedisSync Connect Fail, ip=%s port=%d", m_ip.c_str(), (int)m_port);
-		return false;
-	}
-
-	// 密码或者测试连接
-	std::vector<std::string> buff;
-	if (!m_auth.empty())
-	{
-		buff.push_back("AUTH");
-		buff.push_back(m_auth);
-	}
-	else
-	{
-		buff.push_back("PING");
-	}
-
-	std::ostringstream cmdbuff;
-	cmdbuff << "*" << buff.size() << "\r\n";
-	for (auto it = buff.begin(); it != buff.end(); ++it)
-	{
-		cmdbuff << "$" << it->size() << "\r\n" << *it << "\r\n";
-	}
-	boost::asio::write(m_socket, boost::asio::buffer(cmdbuff.str()), boost::asio::transfer_all(), ec);
-	if (ec)
-	{
-		LogError("RedisSync Write Error, %s", ec.message().c_str());
-		return false;
-	}
-	std::vector<char> readbuff;
-	int pos = 0;
-	if (_ReadByCRLF(readbuff, pos) == -1)
-	{
-		return false;
-	}
-	if (readbuff.size() == 0 || readbuff[0] == '-')
-	{
-		LogError("RedisSync Auto Error, %s", m_auth.c_str());
-		return false;
-	}
-
-	LogError("RedisSync Connect Success, ip=%s port=%d", m_ip.c_str(), (int)m_port);
-	m_bconnected = true;
-	return true;
-}
-
-void RedisSync::_Close()
-{
-	boost::system::error_code ec;
-	if (m_socket.is_open())
-	{
-		m_socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-		m_socket.close(ec);
-	}
-	m_bconnected = false;
-}
-
-bool RedisSync::_DoCommand(const std::vector<std::string>& buff, RedisResult& rst)
-{
-	BuffClearHelper helper(*this);
-
-	// 命令写入buff
-	m_cmdbuff << "*" << buff.size() << "\r\n";
-	for (auto it = buff.begin(); it != buff.end(); ++it)
-	{
-		m_cmdbuff << "$" << it->size() << "\r\n" << *it << "\r\n";
-	}
-	m_cmdcount++;
-
-	if (m_pipeline)
-	{
-		// 开启了管道 返回false
-		return false;
-	}
-
-	// 如果没有连接先尝试连接下
-	if (!m_bconnected)
-	{
-		// 如果ip不为空 重新连接下
-		if ( !m_ip.empty() )
-		{
-			if (!_Connect())
-			{
-				return false;
-			}
-		}
-		else
-		{
-			LogError("Redis Not Connect");
-			return false;
-		}
-	}
-
-	boost::system::error_code ec;
-	boost::asio::write(m_socket, boost::asio::buffer(m_cmdbuff.str()), boost::asio::transfer_all(), ec);
-	if (ec)
-	{
-		// 尝试连接下
-		if (!_Connect())
-		{
-			return false;
-		}
-		boost::asio::write(m_socket, boost::asio::buffer(m_cmdbuff.str()), boost::asio::transfer_all(), ec);
-		if ( ec )
-		{
-			LogError("RedisSync Write Error, %s", ec.message().c_str());
-			return false;
-		}
-	}
-
-	std::vector<char> readbuff;
-	readbuff.reserve(512);
-	int pos = 0;
-	if (!_ReadReply(rst, readbuff, pos))
-	{
-		_Close();
-		return false;
-	}
-	return true;
-}
-
-bool RedisSync::_DoCommand(RedisResult::Array& rst)
-{
-	BuffClearHelper helper(*this);
-
-	// 如果没有连接先尝试连接下
-	if (!m_bconnected)
-	{
-		// 如果ip不为空 重新连接下
-		if (!m_ip.empty())
-		{
-			if (!_Connect())
-			{
-				return false;
-			}
-		}
-		else
-		{
-			LogError("Redis Not Connect");
-			return false;
-		}
-	}
-
-	boost::system::error_code ec;
-	boost::asio::write(m_socket, boost::asio::buffer(m_cmdbuff.str()), boost::asio::transfer_all(), ec);
-	if (ec)
-	{
-		// 尝试连接下
-		if (!_Connect())
-		{
-			return false;
-		}
-		boost::asio::write(m_socket, boost::asio::buffer(m_cmdbuff.str()), boost::asio::transfer_all(), ec);
-		if (ec)
-		{
-			LogError("RedisSync Write Error, %s", ec.message().c_str());
-			return false;
-		}
-	}
-
-	std::vector<char> readbuff;
-	readbuff.reserve(512);
-	int pos = 0;
-	for (int i = 0; i < m_cmdcount; ++i)
-	{
-		rst.push_back(RedisResult());
-		RedisResult& rst2 = rst.back();
-		if (!_ReadReply(rst2, readbuff, pos))
-		{
-			_Close();
-			return false;
-		}
-	}
-	
-	return true;
-}
-
-bool RedisSync::_ReadReply(RedisResult& rst, std::vector<char>& buff, int& pos)
-{
-	int len = _ReadByCRLF(buff,pos);
-	if ( len <= 1 )
-	{
-		return false;
-	}
-
-	char type = buff[pos];
-	len -= 1;
-	pos += 1;
-	switch (type)
-	{
-		case '+':
-		{
-			rst.v = std::string(&buff[pos], &buff[pos + len]);
-
-			pos += len;
-			pos += 2; // \r\n
-			break;
-		}
-		case '-':
-		{
-			rst.v = std::string(&buff[pos], &buff[pos + len]);
-			rst.error = true;
-			LogError("Redis %s", rst.ToString().c_str());
-
-			pos += len;
-			pos += 2; // \r\n
-			break;
-		}
-		case ':':
-		{
-			buff[pos + len] = '\0';
-			char* p = &buff[pos];
-			rst.v = atoll(p);
-			buff[pos + len] = '\r';
-
-			pos += len;
-			pos += 2; // \r\n
-			break;
-		}
-		case '$':
-		{
-			buff[pos + len] = '\0';
-			char* p = &buff[pos];
-			int strlen = atoi(p);
-			buff[pos + len] = '\r';
-
-			pos += len;
-			pos += 2; // \r\n
-
-			if (strlen==-1)
-			{
-				// nil
-			}
-			else
-			{
-				len = _ReadByLen(strlen, buff, pos);
-				if (len == -1)
-				{
-					return false;
-				}
-
-				rst.v = std::string(&buff[pos], &buff[pos + len]);
-
-				pos += len;
-				pos += 2; // \r\n
-			}
-			break;
-		}
-		case '*':
-		{
-			buff[pos + len] = '\0';
-			char* p = &buff[pos];
-			int size = atoi(p);
-			buff[pos + len] = '\r';
-
-			pos += len;
-			pos += 2; // \r\n
-
-			rst.v = RedisResult::Array();
-			RedisResult::Array* pArray = boost::any_cast<RedisResult::Array >(&rst.v);
-			for (int i =0; i < size; ++i)
-			{
-				RedisResult rst2;
-				if (!_ReadReply(rst2, buff, pos))
-				{
-					return false;
-				}
-				pArray->push_back(rst2);
-			}
-			break;
-		}
-		default:
-		{
-			return false;
-		}
-	}
-	
-	return true;
-}
-
-int RedisSync::_ReadByCRLF(std::vector<char>& buff, int pos)
-{
-	do 
-	{
-		for (int i = pos; i < (int)buff.size()-1; ++i)
-		{
-			if (memcmp(&buff[i], "\r\n", 2) == 0)
-			{
-				return i- pos;
-			}
-		}
-
-		boost::array<char, 512> inbuff;
-		boost::system::error_code ec;
-		size_t size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
-		if (ec)
-		{
-			LogError("RedisSync Read Error, %s", ec.message().c_str());
-			return -1;
-		}
-		if ( size > 0 )
-		{
-			buff.insert(buff.end(), inbuff.begin(), inbuff.begin() + size);
-			continue;
-		}
-		break;
-	} while (true);
-
-	return -1;
-}
-
-int RedisSync::_ReadByLen(int len, std::vector<char>& buff, int pos)
-{
-	do
-	{
-		if ((int)buff.size()- pos >= len)
-		{
-			return len;
-		}
-
-		boost::array<char, 512> inbuff;
-		boost::system::error_code ec;
-		size_t size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
-		if (ec)
-		{
-			LogError("RedisSync Read Error, %s", ec.message().c_str());
-			return -1;
-		}
-		if (size > 0)
-		{
-			buff.insert(buff.end(), inbuff.begin(), inbuff.begin() + size);
-			continue;
-		}
-		break;
-	} while (true);
-
-	return -1;
 }
