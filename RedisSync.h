@@ -1,4 +1,4 @@
-#ifndef _REDISSYNC_H_
+ï»¿#ifndef _REDISSYNC_H_
 #define _REDISSYNC_H_
 
 #include <string>
@@ -8,9 +8,9 @@
 #include <boost/asio.hpp>
 #include <boost/any.hpp>
 
-// Í¬²½µ÷ÓÃ£¬²»Ö§³Ö¶àÏß³Ì yuwf
-// ³ıÁË¿ªÆô¹ÜµÀÍâ£¬Ã¿¸öÃüÁîº¯Êı¶¼Ö§³ÖÔ­×ÓĞÔ²Ù×÷
-// ¶©ÔÄÃüÁî²»ÄÜºÍÆäËû·Ç¶©ÔÄÃüÁîÒ»ÆğÊ¹ÓÃ
+// åŒæ­¥è°ƒç”¨ï¼Œä¸æ”¯æŒå¤šçº¿ç¨‹ yuwf
+// é™¤äº†å¼€å¯ç®¡é“å¤–ï¼Œæ¯ä¸ªå‘½ä»¤å‡½æ•°éƒ½æ”¯æŒåŸå­æ€§æ“ä½œ
+// è®¢é˜…å‘½ä»¤ä¸èƒ½å’Œå…¶ä»–éè®¢é˜…å‘½ä»¤ä¸€èµ·ä½¿ç”¨
 
 class RedisResult
 {
@@ -31,10 +31,12 @@ public:
 	const std::string& ToString() const;
 	const Array& ToArray() const;
 
-	// StringÀàĞÍÊ¹ÓÃ ·½±ãÊ¹ÓÃ
+	// Stringç±»å‹ä½¿ç”¨ æ–¹ä¾¿ä½¿ç”¨
 	int StringToInt() const;
 	float StringToFloat() const;
 	double StringToDouble() const;
+
+	void Clear();
 
 protected:
 	friend class RedisSync;
@@ -48,27 +50,28 @@ public:
 	RedisSync();
 	virtual ~RedisSync();
 public:
-	bool InitRedis(const std::string& ip, unsigned short port, const std::string& auth = "");
+	bool InitRedis(const std::string& host, unsigned short port, const std::string& auth = "");
 	void Close();
 
-	// ·µ»Øfalse±íÊ¾½âÎöÊ§°Ü»òÕßÍøÂç¶ÁÈ¡Ê§°Ü
+	// è¿”å›falseè¡¨ç¤ºè§£æå¤±è´¥æˆ–è€…ç½‘ç»œè¯»å–å¤±è´¥
 	bool Command(const std::string& cmd, RedisResult& rst);
 	bool Command(RedisResult& rst, const char* cmd, ...);
 
-	// ¹ÜµÀ¿ªÆôºó Commandº¯Êı¶¼false ÆäËû¸¨Öúº¯Êı¶¼·µ»Ø-1
-	// BeginºÍCommit±ØĞë¶Ô³Æµ÷ÓÃ ·µ»ØÖµ±íÊ¾ÃüÁîÊÇ·ñÖ´ĞĞ³É¹¦
+	// ç®¡é“å¼€å¯å Commandå‡½æ•°éƒ½false å…¶ä»–è¾…åŠ©å‡½æ•°éƒ½è¿”å›-1
+	// Beginå’ŒCommitå¿…é¡»å¯¹ç§°è°ƒç”¨ è¿”å›å€¼è¡¨ç¤ºå‘½ä»¤æ˜¯å¦æ‰§è¡ŒæˆåŠŸ
 	bool PipelineBegin();
 	bool PipelineCommit();
 	bool PipelineCommit(RedisResult::Array& rst);
 
-	// ÒòÎª¶©ÔÄÏûÏ¢ºÍÇëÇóÏûÏ¢ÊÇ²»¶Ô³ÆµÄ£¬ÕâÀïÖ»ÄÜ°Ñ¶©ÔÄ¹¦ÄÜĞ´µÄ¾¡Á¿¼òµ¥
-	// ¶©ÔÄÊ¹ÓÃ ¿ªÆô¶©ÔÄºó£¬Ö´ĞĞÈÎºÎÃüÁî¶¼Ö±½Ó·µ»Øfalse»òÕß-1
-	// ·µ»Øfalse±íÊ¾½âÎöÊ§°Ü»òÕßÍøÂç¶ÁÈ¡Ê§°Ü ·µ»Øtrue±íÊ¾¿ªÆô¶©ÔÄ
+	// å› ä¸ºè®¢é˜…æ¶ˆæ¯å’Œè¯·æ±‚æ¶ˆæ¯æ˜¯ä¸å¯¹ç§°çš„ï¼Œè¿™é‡Œåªèƒ½æŠŠè®¢é˜…åŠŸèƒ½å†™çš„å°½é‡ç®€å•
+	// è®¢é˜…ä½¿ç”¨ å¼€å¯è®¢é˜…åï¼Œæ‰§è¡Œä»»ä½•å‘½ä»¤éƒ½ç›´æ¥è¿”å›falseæˆ–è€…-1
+	// è¿”å›falseè¡¨ç¤ºè§£æå¤±è´¥æˆ–è€…ç½‘ç»œè¯»å–å¤±è´¥ è¿”å›trueè¡¨ç¤ºå¼€å¯è®¢é˜…
 	bool SubScribe(const std::string& channel);
 	bool SubScribe(int cnt, ...);
-	// »ñÈ¡¶©ÔÄµÄÏûÏ¢ block±íÊ¾ÊÇ·ñ×èÈûÖ±µ½ÊÕµ½¶©ÔÄÏûÏ¢
-	bool Message(std::string& channel, std::string& msg, bool block);
-	// È¡Ïû¶©ÔÄ
+	// è·å–è®¢é˜…çš„æ¶ˆæ¯ è¿”å›-1è¡¨ç¤ºæœªå¼€å¯è®¢é˜…æˆ–è€…ç½‘ç»œé”™è¯¯ï¼Œ0è¡¨ç¤ºæ²¡æœ‰æ¶ˆæ¯, 1è¡¨ç¤ºæ”¶åˆ°æ¶ˆæ¯
+	// å‚æ•°blockè¡¨ç¤ºæ˜¯å¦é˜»å¡ç›´åˆ°æ”¶åˆ°è®¢é˜…æ¶ˆæ¯
+	int Message(std::string& channel, std::string& msg, bool block);
+	// å–æ¶ˆè®¢é˜…
 	bool UnSubScribe();
 
 protected:
@@ -76,62 +79,61 @@ protected:
 	void _Close();
 	bool _CheckConnect();
 
-	// ·µ»Øfalse±íÊ¾½âÎöÊ§°Ü»òÕßÍøÂç¶ÁÈ¡Ê§°Ü
+	// è¿”å›falseè¡¨ç¤ºè§£æå¤±è´¥æˆ–è€…ç½‘ç»œè¯»å–å¤±è´¥
 	bool _DoCommand(const std::vector<std::string>& buff, RedisResult& rst);
-	// ¸ñÊ½»¯ÃüÁî
+	// æ ¼å¼åŒ–å‘½ä»¤
 	void _FormatCommand(const std::vector<std::string>& buff, std::stringstream &cmdbuff);
-	// ·¢ËÍÃüÁî
+	// å‘é€å‘½ä»¤
 	bool _SendCommand(const std::string& cmdbuff);
 
-	// ¶ÁÈ¡²¢·ÖÎö buff±íÊ¾¶ÁÈ¡µÄÄÚÈİ pos±íÊ¾½âÎöµ½µÄÎ»ÖÃ
-	// ·µ»ØÖµ -1 ±íÊ¾ÍøÂç´íÎó»òÕß½âÎö´íÎó 0 ±íÊ¾Î´¶ÁÈ¡µ½ 1 ±íÊ¾¶ÁÈ¡µ½ÁË
+	// è¯»å–å¹¶åˆ†æ buffè¡¨ç¤ºè¯»å–çš„å†…å®¹ posè¡¨ç¤ºè§£æåˆ°çš„ä½ç½®
+	// è¿”å›å€¼ -1 è¡¨ç¤ºç½‘ç»œé”™è¯¯æˆ–è€…è§£æé”™è¯¯ 0 è¡¨ç¤ºæœªè¯»å–åˆ° 1 è¡¨ç¤ºè¯»å–åˆ°äº†
 	int _ReadReply(RedisResult& rst, std::vector<char>& buff, int& pos);
 
-	// ·µ»ØÖµ±íÊ¾³¤¶È -1±íÊ¾ÍøÂç¶ÁÈ¡Ê§°Ü 0±íÊ¾Ã»ÓĞ¶ÁÈ¡µ½ pos±íÊ¾buffµÄÆğÊ¼Î»ÖÃ
+	// è¿”å›å€¼è¡¨ç¤ºé•¿åº¦ -1è¡¨ç¤ºç½‘ç»œè¯»å–å¤±è´¥ 0è¡¨ç¤ºæ²¡æœ‰è¯»å–åˆ° posè¡¨ç¤ºbuffçš„èµ·å§‹ä½ç½®
 	int _ReadByCRLF(std::vector<char>& buff, int pos);
 	int _ReadByLen(int len, std::vector<char>& buff, int pos);
 
 	boost::asio::io_service m_ioservice;
 	boost::asio::ip::tcp::socket m_socket;
-	bool m_bconnected;	// ÊÇ·ñÒÑÁ¬½Ó
+	bool m_bconnected;	// æ˜¯å¦å·²è¿æ¥
 
-	std::string m_ip;
+	std::string m_host;
 	unsigned short m_port;
 	std::string m_auth;
-	int m_readouttime;	// ¶ÁÈ¡³¬Ê±Ê±¼ä ºÁÃë <0 ÎŞÏŞµÈ´ı =0 ²»µÈ´ı >0 µÈnºÁÃë
 
-	// ¿ªÆô¹ÜµÀÊ¹ÓÃ
+	// å¼€å¯ç®¡é“ä½¿ç”¨
 	bool m_pipeline;
 	std::stringstream m_pipecmdbuff;
 	int m_pipecmdcount;
 
-	// ¶©ÔÄÊ¹ÓÃ
+	// è®¢é˜…ä½¿ç”¨
 	bool m_subscribe;
 	std::vector<char> m_submsgbuff;
 
 private:
-	// ½ûÖ¹¿½±´
+	// ç¦æ­¢æ‹·è´
 	RedisSync(const RedisSync&) = delete;
 	RedisSync& operator=(const RedisSync&) = delete;
 
 public:
-	// ¸¨ÖúÀà½Ó¿Ú==================================================
-	// ×¢ £º
-	// ¹ÜµÀ¿ªÆôºó ÃüÁî»á»º´æÆğÀ´ ÏÂÃæµÄº¯Êı¶¼·µ»Ø-1
-	// ¿ªÆô¶©ÔÄºóÏÂÃæµÄº¯ÊıÖ±½Ó·µ»Ø-1
+	// è¾…åŠ©ç±»æ¥å£==================================================
+	// æ³¨ ï¼š
+	// ç®¡é“å¼€å¯å å‘½ä»¤ä¼šç¼“å­˜èµ·æ¥ ä¸‹é¢çš„å‡½æ•°éƒ½è¿”å›-1
+	// å¼€å¯è®¢é˜…åä¸‹é¢çš„å‡½æ•°ç›´æ¥è¿”å›-1
 
-	// DELÃüÁî
-	// ·µ»ØÖµ±íÊ¾É¾³ıµÄ¸öÊı -1±íÊ¾ÍøÂç»òÕßÆäËû´íÎó
-	// cnt ±íÊ¾...²ÎÊıµÄ¸öÊı ²ÎÊıÀàĞÍ±ØĞëÊÇCÑùÊ½µÄ×Ö·û´®char*
+	// DELå‘½ä»¤
+	// è¿”å›å€¼è¡¨ç¤ºåˆ é™¤çš„ä¸ªæ•° -1è¡¨ç¤ºç½‘ç»œæˆ–è€…å…¶ä»–é”™è¯¯
+	// cnt è¡¨ç¤º...å‚æ•°çš„ä¸ªæ•° å‚æ•°ç±»å‹å¿…é¡»æ˜¯Cæ ·å¼çš„å­—ç¬¦ä¸²char*
 	int Del(const std::string& key);
 	int Del(int cnt, ...);
 
-	// EXISTSºÍÃüÁî
-	// ·µ»Ø1´æÔÚ 0²»´æÔÚ -1±íÊ¾ÍøÂç»òÕßÆäËû´íÎó
+	// EXISTSå’Œå‘½ä»¤
+	// è¿”å›1å­˜åœ¨ 0ä¸å­˜åœ¨ -1è¡¨ç¤ºç½‘ç»œæˆ–è€…å…¶ä»–é”™è¯¯
 	int Exists(const std::string& key);
 
-	// ¹ıÆÚÏà¹ØÃüÁî
-	// ·µ»Ø1³É¹¦ 0Ê§°Ü -1±íÊ¾ÍøÂç»òÆäËû´íÎó
+	// è¿‡æœŸç›¸å…³å‘½ä»¤
+	// è¿”å›1æˆåŠŸ 0å¤±è´¥ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
 	int Expire(const std::string& key, long long value);
 	int ExpireAt(const std::string& key, long long value);
 	int PExpire(const std::string& key, long long value);
@@ -139,124 +141,124 @@ public:
 	int TTL(const std::string& key, long long& value);
 	int PTTL(const std::string& key, long long& value);
 
-	// SETÃüÁî 
-	// ·µ»Ø1³É¹¦ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
+	// SETå‘½ä»¤ 
+	// è¿”å›1æˆåŠŸ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
 	int Set(const std::string& key, const std::string& value, unsigned int ex = -1, bool nx = false);
 	int Set(const std::string& key, int value, unsigned int ex = -1, bool nx = false);
 	int Set(const std::string& key, float value, unsigned int ex = -1, bool nx = false);
 	int Set(const std::string& key, double value, unsigned int ex = -1, bool nx = false);
 
-	// GETÃüÁî
-	// ·µ»Ø1³É¹¦ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
+	// GETå‘½ä»¤
+	// è¿”å›1æˆåŠŸ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
 	int Get(const std::string& key, std::string& value);
 	int Get(const std::string& key, int& value);
 	int Get(const std::string& key, float& value);
 	int Get(const std::string& key, double& value);
 
-	// MSETÃüÁî
-	// ·µ»Ø1³É¹¦ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// cnt ±íÊ¾...²ÎÊıµÄ¸öÊı/2 ²ÎÊıÀàĞÍ±ØĞëÊÇCÑùÊ½µÄ×Ö·û´®char*
+	// MSETå‘½ä»¤
+	// è¿”å›1æˆåŠŸ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// cnt è¡¨ç¤º...å‚æ•°çš„ä¸ªæ•°/2 å‚æ•°ç±»å‹å¿…é¡»æ˜¯Cæ ·å¼çš„å­—ç¬¦ä¸²char*
 	int MSet(const std::map<std::string, std::string>& kvs);
 	int MSet(const std::map<std::string, int>& kvs);
 	int MSet(const std::map<std::string, float>& kvs);
 	int MSet(const std::map<std::string, double>& kvs);
 	int MSet(int cnt, ...);
 
-	// MGETÃüÁî
-	// ·µ»Ø1³É¹¦ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// Èô³É¹¦ rstÎªÊı×é ÔªËØÎªstring»òÕßnull
+	// MGETå‘½ä»¤
+	// è¿”å›1æˆåŠŸ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// è‹¥æˆåŠŸ rstä¸ºæ•°ç»„ å…ƒç´ ä¸ºstringæˆ–è€…null
 	int MGet(const std::vector<std::string>& keys, RedisResult& rst);
 
-	// HSETÃüÁî
-	// ·µ»Ø1³É¹¦ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
+	// HSETå‘½ä»¤
+	// è¿”å›1æˆåŠŸ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
 	int HSet(const std::string& key, const std::string& field, const std::string& value);
 	int HSet(const std::string& key, const std::string& field, int value);
 	int HSet(const std::string& key, const std::string& field, float value);
 	int HSet(const std::string& key, const std::string& field, double value);
 
-	// HGETÃüÁî
-	// ·µ»Ø1³É¹¦ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
+	// HGETå‘½ä»¤
+	// è¿”å›1æˆåŠŸ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
 	int HGet(const std::string& key, const std::string& field, std::string& value);
 	int HGet(const std::string& key, const std::string& field, int& value);
 	int HGet(const std::string& key, const std::string& field, float& value);
 	int HGet(const std::string& key, const std::string& field, double& value);
 
-	// HLENÃüÁî
-	// ·µ»ØÁĞ±í³¤¶È 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
+	// HLENå‘½ä»¤
+	// è¿”å›åˆ—è¡¨é•¿åº¦ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
 	int HLen(const std::string& key);
 
-	// HEXISTSÃüÁî
-	// ·µ»Ø1´æÔÚ 0²»´æÔÚ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
+	// HEXISTSå‘½ä»¤
+	// è¿”å›1å­˜åœ¨ 0ä¸å­˜åœ¨ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
 	int HExists(const std::string& key, const std::string& field);
 
-	// HEDLÃüÁî
-	// ·µ»ØÖµ±íÊ¾É¾³ıµÄ¸öÊı -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// cnt ±íÊ¾...²ÎÊıµÄ¸öÊı ²ÎÊıÀàĞÍ±ØĞëÊÇCÑùÊ½µÄ×Ö·û´®char*
+	// HEDLå‘½ä»¤
+	// è¿”å›å€¼è¡¨ç¤ºåˆ é™¤çš„ä¸ªæ•° -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// cnt è¡¨ç¤º...å‚æ•°çš„ä¸ªæ•° å‚æ•°ç±»å‹å¿…é¡»æ˜¯Cæ ·å¼çš„å­—ç¬¦ä¸²char*
 	int HDel(const std::string& key, const std::string& field);
 	int HDel(const std::string& key, int cnt, ...);
 
-	// LPUSHÃüÁî
-	// ³É¹¦·µ»ØÁĞ±í³¤¶È 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// cnt ±íÊ¾...²ÎÊıµÄ¸öÊı ²ÎÊıÀàĞÍ±ØĞëÊÇCÑùÊ½µÄ×Ö·û´®char*
+	// LPUSHå‘½ä»¤
+	// æˆåŠŸè¿”å›åˆ—è¡¨é•¿åº¦ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// cnt è¡¨ç¤º...å‚æ•°çš„ä¸ªæ•° å‚æ•°ç±»å‹å¿…é¡»æ˜¯Cæ ·å¼çš„å­—ç¬¦ä¸²char*
 	int LPush(const std::string& key, const std::string& value);
 	int LPush(const std::string& key, int value);
 	int LPush(const std::string& key, float value);
 	int LPush(const std::string& key, double value);
 	int LPush(const std::string& key, int cnt, ...);
 
-	// RPUSHÃüÁî
-	// ³É¹¦·µ»ØÁĞ±í³¤¶È 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// cnt ±íÊ¾...²ÎÊıµÄ¸öÊı ²ÎÊıÀàĞÍ±ØĞëÊÇCÑùÊ½µÄ×Ö·û´®char*
+	// RPUSHå‘½ä»¤
+	// æˆåŠŸè¿”å›åˆ—è¡¨é•¿åº¦ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// cnt è¡¨ç¤º...å‚æ•°çš„ä¸ªæ•° å‚æ•°ç±»å‹å¿…é¡»æ˜¯Cæ ·å¼çš„å­—ç¬¦ä¸²char*
 	int RPush(const std::string& key, const std::string& value);
 	int RPush(const std::string& key, int value);
 	int RPush(const std::string& key, float value);
 	int RPush(const std::string& key, double value);
 	int RPush(const std::string& key, int cnt, ...);
 
-	// LPOPÃüÁî
-	// 1³É¹¦ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// value±íÊ¾ÒÆ³ıµÄÔªËØ
+	// LPOPå‘½ä»¤
+	// 1æˆåŠŸ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// valueè¡¨ç¤ºç§»é™¤çš„å…ƒç´ 
 	int LPop(const std::string& key);
 	int LPop(const std::string& key, std::string& value);
 	int LPop(const std::string& key, int& value);
 	int LPop(const std::string& key, float& value);
 	int LPop(const std::string& key, double& value);
 
-	// RPOPÃüÁî
-	// 1³É¹¦ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// value±íÊ¾ÒÆ³ıµÄÔªËØ
+	// RPOPå‘½ä»¤
+	// 1æˆåŠŸ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// valueè¡¨ç¤ºç§»é™¤çš„å…ƒç´ 
 	int RPop(const std::string& key);
 	int RPop(const std::string& key, std::string& value);
 	int RPop(const std::string& key, int& value);
 	int RPop(const std::string& key, float& value);
 	int RPop(const std::string& key, double& value);
 
-	// LRANGEÃüÁî
-	// 1³É¹¦ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// Èô³É¹¦ rstÎªÊı×é ÔªËØÎªstring
+	// LRANGEå‘½ä»¤
+	// 1æˆåŠŸ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// è‹¥æˆåŠŸ rstä¸ºæ•°ç»„ å…ƒç´ ä¸ºstring
 	int LRange(const std::string& key, int start, int stop, RedisResult& rst);
 
-	// LREMÃüÁî
-	// ³É¹¦·µ»ØÒÆ³ıÔªËØµÄ¸öÊı 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// Èô³É¹¦ rstÎªÊı×é ÔªËØÎªstring
+	// LREMå‘½ä»¤
+	// æˆåŠŸè¿”å›ç§»é™¤å…ƒç´ çš„ä¸ªæ•° 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// è‹¥æˆåŠŸ rstä¸ºæ•°ç»„ å…ƒç´ ä¸ºstring
 	int LRem(const std::string& key, int count, std::string& value);
 
-	// LLENÃüÁî
-	// ·µ»ØÁĞ±í³¤¶È 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
+	// LLENå‘½ä»¤
+	// è¿”å›åˆ—è¡¨é•¿åº¦ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
 	int LLen(const std::string& key);
 
-	// SADDÃüÁî
-	// ³É¹¦·µ»ØÌí¼ÓµÄÊıÁ¿ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// cnt ±íÊ¾...²ÎÊıµÄ¸öÊı ²ÎÊıÀàĞÍ±ØĞëÊÇCÑùÊ½µÄ×Ö·û´®char*
+	// SADDå‘½ä»¤
+	// æˆåŠŸè¿”å›æ·»åŠ çš„æ•°é‡ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// cnt è¡¨ç¤º...å‚æ•°çš„ä¸ªæ•° å‚æ•°ç±»å‹å¿…é¡»æ˜¯Cæ ·å¼çš„å­—ç¬¦ä¸²char*
 	int SAdd(const std::string& key, const std::string& value);
 	int SAdd(const std::string& key, int value);
 	int SAdd(const std::string& key, float value);
 	int SAdd(const std::string& key, double value);
 	int SAdd(const std::string& key, int cnt, ...);
 
-	// SREMÃüÁî
-	// ³É¹¦·µ»ØÒÆ³ıÔªËØµÄÊıÁ¿ 0²»³É¹¦ -1±íÊ¾ÍøÂç»òÆäËû´íÎó
-	// cnt ±íÊ¾...²ÎÊıµÄ¸öÊı ²ÎÊıÀàĞÍ±ØĞëÊÇCÑùÊ½µÄ×Ö·û´®char*
+	// SREMå‘½ä»¤
+	// æˆåŠŸè¿”å›ç§»é™¤å…ƒç´ çš„æ•°é‡ 0ä¸æˆåŠŸ -1è¡¨ç¤ºç½‘ç»œæˆ–å…¶ä»–é”™è¯¯
+	// cnt è¡¨ç¤º...å‚æ•°çš„ä¸ªæ•° å‚æ•°ç±»å‹å¿…é¡»æ˜¯Cæ ·å¼çš„å­—ç¬¦ä¸²char*
 	int SRem(const std::string& key, const std::string& value);
 	int SRem(const std::string& key, int value);
 	int SRem(const std::string& key, float value);

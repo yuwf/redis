@@ -1,4 +1,4 @@
-#include <stdio.h>
+ï»¿#include <stdio.h>
 #include <stdarg.h>
 #include <boost/array.hpp>
 #include "RedisSync.h"
@@ -99,10 +99,16 @@ double RedisResult::StringToDouble() const
 	return 0.0f;
 }
 
+void RedisResult::Clear()
+{
+	v.clear();
+	error = false;
+}
+
 RedisSync::RedisSync() : m_socket(m_ioservice)
 {
 	m_bconnected = false;
-	m_ip = "";
+	m_host = "";
 	m_port = 0;
 	m_pipeline = false;
 	m_pipecmdcount = 0;
@@ -114,15 +120,15 @@ RedisSync::~RedisSync()
 
 }
 
-bool RedisSync::InitRedis(const std::string& ip, unsigned short port, const std::string& auth)
+bool RedisSync::InitRedis(const std::string& host, unsigned short port, const std::string& auth)
 {
-	if(ip.empty())
+	if(host.empty())
 	{
 		LogError("Redis ip is empty");
 		return false;
 	}
 
-	m_ip = ip;
+	m_host = host;
 	m_port = port;
 	m_auth = auth;
 
@@ -135,7 +141,7 @@ bool RedisSync::InitRedis(const std::string& ip, unsigned short port, const std:
 
 	if (!_Connect())
 	{
-		m_ip = "";
+		m_host = "";
 		m_port = 0;
 		m_auth = "";
 		return false;
@@ -155,7 +161,7 @@ bool RedisSync::Command(const std::string& cmd, RedisResult& rst)
 		return false;
 	}
 	std::string temp = cmd;
-	int protect = 0;	// 1 µ¥ÒıºÅ±£»¤  2 Ë«ÒıºÅ±£»¤
+	int protect = 0;	// 1 å•å¼•å·ä¿æŠ¤  2 åŒå¼•å·ä¿æŠ¤
 	int size = (int)temp.size();
 	for (int i = 0; i < size; ++i)
 	{
@@ -183,12 +189,12 @@ bool RedisSync::Command(const std::string& cmd, RedisResult& rst)
 		}
 		if (temp[i] == '\'')
 		{
-			protect = 1; // ½øÈëµ¥ÒıºÅ
+			protect = 1; // è¿›å…¥å•å¼•å·
 			temp[i] = '\0';
 		}
 		if (temp[i] == '\"')
 		{
-			protect = 2; // ½øÈëË«ÒıºÅ
+			protect = 2; // è¿›å…¥åŒå¼•å·
 			temp[i] = '\0';
 		}
 	}
@@ -302,7 +308,7 @@ bool RedisSync::SubScribe(const std::string& channel)
 	buff.push_back("SUBSCRIBE");
 	buff.push_back(channel);
 
-	// ÃüÁîĞ´Èëbuff
+	// å‘½ä»¤å†™å…¥buff
 	std::stringstream cmdbuff;
 	_FormatCommand(buff, cmdbuff);
 
@@ -311,7 +317,7 @@ bool RedisSync::SubScribe(const std::string& channel)
 		return false;
 	}
 
-	std::vector<char> readbuff; // ×¢ÒâÕâ¸öreadbuff¿ÉÄÜÒÑ¾­°üº¬ÁË¶©ÔÄÏûÏ¢
+	std::vector<char> readbuff; // æ³¨æ„è¿™ä¸ªreadbuffå¯èƒ½å·²ç»åŒ…å«äº†è®¢é˜…æ¶ˆæ¯
 	int pos = 0;
 	RedisResult rst;
 	if (_ReadReply(rst, readbuff, pos) != 1)
@@ -319,7 +325,7 @@ bool RedisSync::SubScribe(const std::string& channel)
 		_Close();
 		return false;
 	}
-	// ÅĞ¶ÏÊÇ·ñ¼àÌı³É¹¦
+	// åˆ¤æ–­æ˜¯å¦ç›‘å¬æˆåŠŸ
 	if (!rst.IsArray())
 	{
 		LogError("UnKnown Error");
@@ -338,7 +344,7 @@ bool RedisSync::SubScribe(const std::string& channel)
 	}
 
 	m_subscribe = true;
-	// ¶àÓàÎ´·ÖÎöµÄbuffer
+	// å¤šä½™æœªåˆ†æçš„buffer
 	m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
 
 	return true;
@@ -367,7 +373,7 @@ bool RedisSync::SubScribe(int cnt, ...)
 	}
 	va_end(ap);
 
-	// ÃüÁîĞ´Èëbuff
+	// å‘½ä»¤å†™å…¥buff
 	std::stringstream cmdbuff;
 	_FormatCommand(buff, cmdbuff);
 
@@ -387,7 +393,7 @@ bool RedisSync::SubScribe(int cnt, ...)
 			_Close();
 			return false;
 		}
-		// ÅĞ¶ÏÊÇ·ñ¼àÌı³É¹¦
+		// åˆ¤æ–­æ˜¯å¦ç›‘å¬æˆåŠŸ
 		if (!rst.IsArray())
 		{
 			LogError("UnKnown Error");
@@ -405,7 +411,7 @@ bool RedisSync::SubScribe(int cnt, ...)
 			return false;
 		}
 
-		// ¶àÓàÎ´·ÖÎöµÄbuffer
+		// å¤šä½™æœªåˆ†æçš„buffer
 		m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
 	}
 	
@@ -414,51 +420,58 @@ bool RedisSync::SubScribe(int cnt, ...)
 	return true;
 }
 
-bool RedisSync::Message(std::string& channel, std::string& msg, bool block)
+int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 {
 	if (!m_subscribe)
 	{
 		LogError("SubScribe Not Call");
-		return false;
+		return -1;
 	}
 
 	boost::system::error_code ec;
-	m_socket.io_control(boost::asio::ip::tcp::socket::non_blocking_io(!block), ec);
+	boost::asio::ip::tcp::socket::non_blocking_io non_block(!block);
+	m_socket.io_control(non_block, ec);
 
 	std::vector<char> readbuff;
 	readbuff.swap(m_submsgbuff);
 	int pos = 0;
 	RedisResult value;
-	if (_ReadReply(value, readbuff, pos) != 1)
+	int rst = _ReadReply(value, readbuff, pos);
+	if ( rst == -1 )
+	{
+		_Close();
+		return -1;
+	}
+	else if ( rst == 0 )
 	{
 		m_submsgbuff.swap(readbuff);
-		return false;
+		return 0;
 	}
 
-	// ±£´æÎ´·ÖÎöµÄÊı¾İ
+	// ä¿å­˜æœªåˆ†æçš„æ•°æ®
 	m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
 
-	// ÅĞ¶ÏÊı¾İÀàĞÍ
+	// åˆ¤æ–­æ•°æ®ç±»å‹
 	if (!value.IsArray())
 	{
 		LogError("UnKnown Error");
-		return false;
+		return -1;
 	}
 	auto rstarray = value.ToArray();
 	if (rstarray.size() < 3 || !rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsString())
 	{
 		LogError("UnKnown Error");
-		return false;
+		return -1;
 	}
 	if (rstarray[0].ToString() != "message")
 	{
 		LogError("UnKnown Error");
-		return false;
+		return -1;
 	}
 	channel = rstarray[1].ToString();
 	msg = rstarray[2].ToString();
 
-	return true;
+	return 1;
 }
 
 bool RedisSync::UnSubScribe()
@@ -470,12 +483,13 @@ bool RedisSync::UnSubScribe()
 	}
 
 	boost::system::error_code ec;
-	m_socket.io_control(boost::asio::ip::tcp::socket::non_blocking_io(false), ec);
+	boost::asio::ip::tcp::socket::non_blocking_io non_block(false);
+	m_socket.io_control(non_block, ec);
 
 	std::vector<std::string> buff;
 	buff.push_back("UNSUBSCRIBE");
 
-	// ÃüÁîĞ´Èëbuff
+	// å‘½ä»¤å†™å…¥buff
 	std::stringstream cmdbuff;
 	_FormatCommand(buff, cmdbuff);
 
@@ -496,10 +510,10 @@ bool RedisSync::UnSubScribe()
 			return false;
 		}
 
-		// ±£´æÎ´·ÖÎöµÄÊı¾İ
+		// ä¿å­˜æœªåˆ†æçš„æ•°æ®
 		m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
 
-		// ÅĞ¶ÏÊı¾İÀàĞÍ
+		// åˆ¤æ–­æ•°æ®ç±»å‹
 		if (!value.IsArray())
 		{
 			LogError("UnKnown Error");
@@ -514,7 +528,7 @@ bool RedisSync::UnSubScribe()
 
 		if (rstarray[0].ToString() == "message")
 		{
-			// Î´´¦ÀíµÄ¶©ÔÄÏûÏ¢
+			// æœªå¤„ç†çš„è®¢é˜…æ¶ˆæ¯
 			continue;
 		}
 		else if (rstarray[0].ToString() == "unsubscribe")
@@ -526,7 +540,7 @@ bool RedisSync::UnSubScribe()
 		}
 		else
 		{
-			// Ê²Ã´Çé¿ö
+			// ä»€ä¹ˆæƒ…å†µ
 			LogError("UnKnown Error");
 			return false;
 		}
@@ -540,27 +554,44 @@ bool RedisSync::_Connect()
 {
 	_Close();
 
-	boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::address::from_string(m_ip), m_port);
-	boost::system::error_code ec;
-	m_socket.open(endpoint.protocol(), ec);
+	// æ”¯æŒåŸŸå
+	boost::asio::ip::tcp::resolver nresolver(m_ioservice);
+	boost::asio::ip::tcp::resolver::query nquery(m_host, std::to_string(m_port));
+	boost::asio::ip::tcp::resolver::iterator endpoint_iterator = nresolver.resolve(nquery);
+	boost::asio::ip::tcp::resolver::iterator end_iterator;
+	boost::system::error_code ec = boost::asio::error::host_not_found;
+	while (ec && endpoint_iterator != end_iterator)
+	{
+		m_socket.open(endpoint_iterator->endpoint().protocol(), ec);
+		if (ec)
+		{
+			endpoint_iterator++;
+			continue;
+		}
+		
+		//int nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_CONNECT_TIME, (const char*)&timeout, sizeof(timeout));
+
+		m_socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
+		m_socket.set_option(boost::asio::socket_base::keep_alive(true), ec);
+		boost::asio::ip::tcp::socket::non_blocking_io non_block(false);
+		m_socket.io_control(non_block, ec);
+
+		m_socket.connect(*endpoint_iterator, ec);
+		if (ec)
+		{
+			m_socket.close(ec);
+			endpoint_iterator++;
+			continue;
+		}
+	}
+
 	if (ec)
 	{
-		LogError("RedisSync Open Fail, ip=%s port=%d", m_ip.c_str(), (int)m_port);
+		LogError("RedisSync Connect Fail, host=%s port=%d", m_host.c_str(), (int)m_port);
 		return false;
 	}
 
-	m_socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
-	m_socket.set_option(boost::asio::socket_base::keep_alive(true), ec);
-	m_socket.io_control(boost::asio::ip::tcp::socket::non_blocking_io(false), ec);
-
-	m_socket.connect(endpoint, ec);
-	if (ec)
-	{
-		LogError("RedisSync Connect Fail, ip=%s port=%d", m_ip.c_str(), (int)m_port);
-		return false;
-	}
-
-	// ÃÜÂë»òÕß²âÊÔÁ¬½Ó
+	// å¯†ç æˆ–è€…æµ‹è¯•è¿æ¥
 	std::vector<std::string> buff;
 	if (!m_auth.empty())
 	{
@@ -578,6 +609,7 @@ bool RedisSync::_Connect()
 	boost::asio::write(m_socket, boost::asio::buffer(cmdbuff.str()), boost::asio::transfer_all(), ec);
 	if (ec)
 	{
+		m_socket.close(ec);
 		LogError("RedisSync Write Error, %s", ec.message().c_str());
 		return false;
 	}
@@ -587,15 +619,18 @@ bool RedisSync::_Connect()
 	int pos = 0;
 	if (_ReadReply(rst, readbuff, pos) != 1)
 	{
+		m_socket.close(ec);
+		LogError("RedisSync Maybe Not Valid Redis Address, host=%s port=%d", m_host.c_str(), (int)m_port);
 		return false;
 	}
 	if (rst.IsNull() || rst.IsError())
 	{
+		m_socket.close(ec);
 		LogError("RedisSync Auth Error, %s", m_auth.c_str());
 		return false;
 	}
 
-	LogError("RedisSync Connect Success, ip=%s port=%d", m_ip.c_str(), (int)m_port);
+	LogError("RedisSync Connect Success, host=%s port=%d", m_host.c_str(), (int)m_port);
 	m_bconnected = true;
 	return true;
 }
@@ -609,16 +644,16 @@ void RedisSync::_Close()
 		m_socket.close(ec);
 	}
 	m_bconnected = false;
-	m_subscribe = false; // ¶Ï¿ªÁ¬½Ó¶©ÔÄ¿Ï¶¨¾Í²»ÄÜÓÃÁË
+	m_subscribe = false; // æ–­å¼€è¿æ¥è®¢é˜…è‚¯å®šå°±ä¸èƒ½ç”¨äº†
 }
 
 bool RedisSync::_CheckConnect()
 {
-	// Èç¹ûÃ»ÓĞÁ¬½ÓÏÈ³¢ÊÔÁ¬½ÓÏÂ
+	// å¦‚æœæ²¡æœ‰è¿æ¥å…ˆå°è¯•è¿æ¥ä¸‹
 	if (!m_bconnected)
 	{
-		// Èç¹ûip²»Îª¿Õ ÖØĞÂÁ¬½ÓÏÂ
-		if (!m_ip.empty())
+		// å¦‚æœipä¸ä¸ºç©º é‡æ–°è¿æ¥ä¸‹
+		if (!m_host.empty())
 		{
 			if (!_Connect())
 			{
@@ -644,7 +679,7 @@ bool RedisSync::_DoCommand(const std::vector<std::string>& buff, RedisResult& rs
 
 	if (m_pipeline)
 	{
-		// ¿ªÆôÁË¹ÜµÀ ÃüÁîĞ´Èë¹ÜµÀbuff
+		// å¼€å¯äº†ç®¡é“ å‘½ä»¤å†™å…¥ç®¡é“buff
 		_FormatCommand(buff, m_pipecmdbuff);
 		m_pipecmdcount++;
 		return false;
@@ -689,7 +724,7 @@ bool RedisSync::_SendCommand(const std::string& cmdbuff)
 	boost::asio::write(m_socket, boost::asio::buffer(cmdbuff), boost::asio::transfer_all(), ec);
 	if (ec)
 	{
-		// ³¢ÊÔÁ¬½ÓÏÂ
+		// å°è¯•è¿æ¥ä¸‹
 		if (!_Connect())
 		{
 			return false;
@@ -767,15 +802,15 @@ int RedisSync::_ReadReply(RedisResult& rst, std::vector<char>& buff, int& pos)
 			}
 			else
 			{
-				int len = _ReadByLen(strlen, buff, pos);
-				if (len < 0)
+				int len = _ReadByLen(strlen+2, buff, pos); // +2è¡¨ç¤ºä¿è¯è¯»å–åˆ°ç½‘ç»œç¼“å­˜ä¸­çš„\r\n
+				if (len <= 0)
 				{
 					return len;
 				}
 
-				rst.v = std::string(&buff[pos], &buff[pos + len]);
+				rst.v = std::string(&buff[pos], strlen);
 
-				pos += len;
+				pos += strlen;
 				pos += 2; // \r\n
 			}
 			break;
@@ -831,7 +866,7 @@ int RedisSync::_ReadByCRLF(std::vector<char>& buff, int pos)
 		{
 			if (ec == boost::asio::error::would_block)
 			{
-				// ·Ç×èÈûsocket
+				// éé˜»å¡socket
 				return 0;
 			}
 			LogError("RedisSync Read Error, %s", ec.message().c_str());
@@ -864,7 +899,7 @@ int RedisSync::_ReadByLen(int len, std::vector<char>& buff, int pos)
 		{
 			if (ec == boost::asio::error::would_block)
 			{
-				// ·Ç×èÈûsocket
+				// éé˜»å¡socket
 				return 0;
 			}
 			LogError("RedisSync Read Error, %s", ec.message().c_str());
@@ -1124,12 +1159,12 @@ int RedisSync::Set(const std::string& key, const std::string& value, unsigned in
 	}
 	if (rst.IsError())
 	{
-		// ÃüÁî´íÎó
+		// å‘½ä»¤é”™è¯¯
 		return 0;
 	}
 	if (rst.IsNull())
 	{
-		// Î´ÉèÖÃ³É¹¦
+		// æœªè®¾ç½®æˆåŠŸ
 		return 0;
 	}
 	return 1;
@@ -1163,12 +1198,12 @@ int RedisSync::Get(const std::string& key, std::string& value)
 	}
 	if (rst.IsError())
 	{
-		// ÃüÁî´íÎó
+		// å‘½ä»¤é”™è¯¯
 		return 0;
 	}
 	if (rst.IsNull())
 	{
-		// Î´»ñÈ¡µ½Öµ
+		// æœªè·å–åˆ°å€¼
 		return 0;
 	}
 	if (rst.IsString())
@@ -1233,12 +1268,12 @@ int RedisSync::MSet(const std::map<std::string, std::string>& kvs)
 	}
 	if (rst.IsError())
 	{
-		// ÃüÁî´íÎó
+		// å‘½ä»¤é”™è¯¯
 		return 0;
 	}
 	if (rst.IsNull())
 	{
-		// Î´ÉèÖÃ³É¹¦
+		// æœªè®¾ç½®æˆåŠŸ
 		return 0;
 	}
 	return 1;
@@ -1261,12 +1296,12 @@ int RedisSync::MSet(const std::map<std::string, int>& kvs)
 	}
 	if (rst.IsError())
 	{
-		// ÃüÁî´íÎó
+		// å‘½ä»¤é”™è¯¯
 		return 0;
 	}
 	if (rst.IsNull())
 	{
-		// Î´ÉèÖÃ³É¹¦
+		// æœªè®¾ç½®æˆåŠŸ
 		return 0;
 	}
 	return 1;
@@ -1289,12 +1324,12 @@ int RedisSync::MSet(const std::map<std::string, float>& kvs)
 	}
 	if (rst.IsError())
 	{
-		// ÃüÁî´íÎó
+		// å‘½ä»¤é”™è¯¯
 		return 0;
 	}
 	if (rst.IsNull())
 	{
-		// Î´ÉèÖÃ³É¹¦
+		// æœªè®¾ç½®æˆåŠŸ
 		return 0;
 	}
 	return 1;
@@ -1317,12 +1352,12 @@ int RedisSync::MSet(const std::map<std::string, double>& kvs)
 	}
 	if (rst.IsError())
 	{
-		// ÃüÁî´íÎó
+		// å‘½ä»¤é”™è¯¯
 		return 0;
 	}
 	if (rst.IsNull())
 	{
-		// Î´ÉèÖÃ³É¹¦
+		// æœªè®¾ç½®æˆåŠŸ
 		return 0;
 	}
 	return 1;
@@ -1349,12 +1384,12 @@ int RedisSync::MSet(int cnt, ...)
 	}
 	if (rst.IsError())
 	{
-		// ÃüÁî´íÎó
+		// å‘½ä»¤é”™è¯¯
 		return 0;
 	}
 	if (rst.IsNull())
 	{
-		// Î´ÉèÖÃ³É¹¦
+		// æœªè®¾ç½®æˆåŠŸ
 		return 0;
 	}
 	return 1;
@@ -1376,12 +1411,12 @@ int RedisSync::MGet(const std::vector<std::string>& keys, RedisResult& rst)
 	}
 	if (rst.IsError())
 	{
-		// ÃüÁî´íÎó
+		// å‘½ä»¤é”™è¯¯
 		return 0;
 	}
 	if (rst.IsNull())
 	{
-		// Î´»ñÈ¡µ½Öµ
+		// æœªè·å–åˆ°å€¼
 		return 0;
 	}
 	if (rst.IsArray())
@@ -1407,7 +1442,7 @@ int RedisSync::HSet(const std::string& key, const std::string& field, const std:
 	}
 	if (rst.IsError())
 	{
-		// ÃüÁî´íÎó
+		// å‘½ä»¤é”™è¯¯
 		return 0;
 	}
 	if (rst.IsInt())
@@ -1447,12 +1482,12 @@ int RedisSync::HGet(const std::string& key, const std::string& field, std::strin
 	}
 	if (rst.IsError())
 	{
-		// ÃüÁî´íÎó
+		// å‘½ä»¤é”™è¯¯
 		return 0;
 	}
 	if (rst.IsNull())
 	{
-		// Î´»ñÈ¡µ½Öµ
+		// æœªè·å–åˆ°å€¼
 		return 0;
 	}
 	if (rst.IsString())
