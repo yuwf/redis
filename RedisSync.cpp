@@ -4,111 +4,12 @@
 #include "RedisSync.h"
 
 #define LogError
-
-RedisResult::RedisResult() : error(false)
-{
-}
-
-bool RedisResult::IsError() const
-{
-	return error;
-}
-
-bool RedisResult::IsNull() const
-{
-	return v.empty();
-}
-
-bool RedisResult::IsInt() const
-{
-	return v.type() == typeid(long long);
-}
-
-bool RedisResult::IsString() const
-{
-	return v.type() == typeid(std::string);
-}
-
-bool RedisResult::IsArray() const
-{
-	return v.type() == typeid(Array);
-}
-
-int RedisResult::ToInt() const
-{
-	if (IsInt())
-	{
-		return (int)boost::any_cast<long long>(v);
-	}
-	return 0;
-}
-
-long long RedisResult::ToLongLong() const
-{
-	if (IsInt())
-	{
-		return boost::any_cast<long long>(v);
-	}
-	return 0;
-}
-
-const std::string& RedisResult::ToString() const
-{
-	if (IsString())
-	{
-		return *boost::any_cast<std::string>(&v);
-	}
-	static std::string empty;
-	return empty;
-}
-
-const RedisResult::Array& RedisResult::ToArray() const
-{
-	if (IsArray())
-	{
-		return *boost::any_cast<Array >(&v);
-	}
-	static Array empty;
-	return empty;
-}
-
-int RedisResult::StringToInt() const
-{
-	if (IsString())
-	{
-		return atoi(boost::any_cast<std::string>(v).c_str());
-	}
-	return 0;
-}
-
-float RedisResult::StringToFloat() const
-{
-	if (IsString())
-	{
-		return (float)atof(boost::any_cast<std::string>(v).c_str());
-	}
-	return 0.0f;
-}
-
-double RedisResult::StringToDouble() const
-{
-	if (IsString())
-	{
-		return atof(boost::any_cast<std::string>(v).c_str());
-	}
-	return 0.0f;
-}
-
-void RedisResult::Clear()
-{
-	v.clear();
-	error = false;
-}
+#define LogInfo
 
 RedisSync::RedisSync() : m_socket(m_ioservice)
 {
 	m_bconnected = false;
-	m_host = "";
+	m_recvpos = 0;
 	m_port = 0;
 	m_pipeline = false;
 	m_pipecmdcount = 0;
@@ -137,13 +38,12 @@ bool RedisSync::InitRedis(const std::string& host, unsigned short port, const st
 	m_pipecmdcount = 0;
 
 	m_subscribe = false;
-	m_submsgbuff.clear();
 
-	if (!_Connect())
+	if (!Connect())
 	{
-		m_host = "";
+		m_host.clear();
 		m_port = 0;
-		m_auth = "";
+		m_auth.clear();
 		return false;
 	}
 	return true;
@@ -151,7 +51,15 @@ bool RedisSync::InitRedis(const std::string& host, unsigned short port, const st
 
 void RedisSync::Close()
 {
-	_Close();
+	boost::system::error_code ec;
+	if (m_socket.is_open())
+	{
+		m_socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+		m_socket.close(ec);
+	}
+	m_bconnected = false;
+	ClearRecvBuff();
+	m_subscribe = false; // 断开连接订阅肯定就不能用了
 }
 
 bool RedisSync::Command(const std::string& cmd, RedisResult& rst)
@@ -211,7 +119,7 @@ bool RedisSync::Command(const std::string& cmd, RedisResult& rst)
 		i += (int)buff.back().size();
 	}
 	
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return false;
 	}
@@ -237,7 +145,7 @@ bool RedisSync::PipelineBegin()
 		return false;
 	}
 
-	if (!_CheckConnect())
+	if (!CheckConnect())
 	{
 		return false;
 	}
@@ -275,22 +183,30 @@ bool RedisSync::PipelineCommit(RedisResult::Array& rst)
 	m_pipecmdbuff.str("");
 	m_pipecmdcount = 0;
 
-	if (!_SendCommand(cmdbuff))
+	if (cmdcount == 0)
+	{
+		return true;
+	}
+
+	if (!SendCommand(cmdbuff))
 	{
 		return false;
 	}
 
-	std::vector<char> readbuff;
-	readbuff.reserve(512);
-	int pos = 0;
+	ClearRecvBuff();
+
 	for (int i = 0; i < cmdcount; ++i)
 	{
 		rst.push_back(RedisResult());
 		RedisResult& rst2 = rst.back();
-		if (_ReadReply(rst2, readbuff, pos) != 1)
+		if (ReadReply(rst2) != 1)
 		{
-			_Close();
+			Close();
 			return false;
+		}
+		if (rst2.IsError())
+		{
+			LogError("Redis %s", rst2.ToString().c_str());
 		}
 	}
 
@@ -299,6 +215,11 @@ bool RedisSync::PipelineCommit(RedisResult::Array& rst)
 
 bool RedisSync::SubScribe(const std::string& channel)
 {
+	if (m_pipeline)
+	{
+		LogError("Pipeline Running");
+		return false;
+	}
 	if (m_subscribe)
 	{
 		LogError("SubScribe Running, Only Open Once SubScribe");
@@ -308,21 +229,9 @@ bool RedisSync::SubScribe(const std::string& channel)
 	buff.push_back("SUBSCRIBE");
 	buff.push_back(channel);
 
-	// 命令写入buff
-	std::stringstream cmdbuff;
-	_FormatCommand(buff, cmdbuff);
-
-	if (!_SendCommand(cmdbuff.str()))
-	{
-		return false;
-	}
-
-	std::vector<char> readbuff; // 注意这个readbuff可能已经包含了订阅消息
-	int pos = 0;
 	RedisResult rst;
-	if (_ReadReply(rst, readbuff, pos) != 1)
+	if (!DoCommand(buff, rst))
 	{
-		_Close();
 		return false;
 	}
 	// 判断是否监听成功
@@ -344,14 +253,19 @@ bool RedisSync::SubScribe(const std::string& channel)
 	}
 
 	m_subscribe = true;
-	// 多余未分析的buffer
-	m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
+	
+	ResetRecvBuff();
 
 	return true;
 }
 
-bool RedisSync::SubScribe(int cnt, ...)
+bool RedisSync::SubScribes(int cnt, ...)
 {
+	if (m_pipeline)
+	{
+		LogError("Pipeline Running");
+		return false;
+	}
 	if (m_subscribe)
 	{
 		LogError("SubScribe Running, Only Open Once SubScribe");
@@ -375,22 +289,21 @@ bool RedisSync::SubScribe(int cnt, ...)
 
 	// 命令写入buff
 	std::stringstream cmdbuff;
-	_FormatCommand(buff, cmdbuff);
+	FormatCommand(buff, cmdbuff);
 
-	if (!_SendCommand(cmdbuff.str()))
+	if (!SendCommand(cmdbuff.str()))
 	{
 		return false;
 	}
 
+	ClearRecvBuff();
+
 	for (int i = 0; i < cnt; ++i)
 	{
-		std::vector<char> readbuff;
-		readbuff.swap(m_submsgbuff);
-		int pos = 0;
 		RedisResult rst;
-		if (_ReadReply(rst, readbuff, pos) != 1)
+		if (ReadReply(rst) != 1)
 		{
-			_Close();
+			Close();
 			return false;
 		}
 		// 判断是否监听成功
@@ -410,12 +323,11 @@ bool RedisSync::SubScribe(int cnt, ...)
 			LogError("UnKnown Error");
 			return false;
 		}
-
-		// 多余未分析的buffer
-		m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
 	}
 	
 	m_subscribe = true;
+
+	ResetRecvBuff();
 
 	return true;
 }
@@ -432,24 +344,17 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 	boost::asio::ip::tcp::socket::non_blocking_io non_block(!block);
 	m_socket.io_control(non_block, ec);
 
-	std::vector<char> readbuff;
-	readbuff.swap(m_submsgbuff);
-	int pos = 0;
 	RedisResult value;
-	int rst = _ReadReply(value, readbuff, pos);
+	int rst = ReadReply(value);
 	if ( rst == -1 )
 	{
-		_Close();
+		Close();
 		return -1;
 	}
 	else if ( rst == 0 )
 	{
-		m_submsgbuff.swap(readbuff);
 		return 0;
 	}
-
-	// 保存未分析的数据
-	m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
 
 	// 判断数据类型
 	if (!value.IsArray())
@@ -471,6 +376,11 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 	channel = rstarray[1].ToString();
 	msg = rstarray[2].ToString();
 
+	if (m_recvbuff.size() > 1024)
+	{
+		ResetRecvBuff();
+	}
+
 	return 1;
 }
 
@@ -491,27 +401,21 @@ bool RedisSync::UnSubScribe()
 
 	// 命令写入buff
 	std::stringstream cmdbuff;
-	_FormatCommand(buff, cmdbuff);
+	FormatCommand(buff, cmdbuff);
 
-	if (!_SendCommand(cmdbuff.str()))
+	if (!SendCommand(cmdbuff.str()))
 	{
 		return false;
 	}
 
 	do 
 	{
-		std::vector<char> readbuff;
-		readbuff.swap(m_submsgbuff);
-		int pos = 0;
 		RedisResult value;
-		if (_ReadReply(value, readbuff, pos) != 1)
+		if (ReadReply(value) != 1)
 		{
-			_Close();
+			Close();
 			return false;
 		}
-
-		// 保存未分析的数据
-		m_submsgbuff = std::vector<char>(readbuff.begin() + pos, readbuff.end());
 
 		// 判断数据类型
 		if (!value.IsArray())
@@ -550,9 +454,9 @@ bool RedisSync::UnSubScribe()
 	return true;
 }
 
-bool RedisSync::_Connect()
+bool RedisSync::Connect()
 {
-	_Close();
+	Close();
 
 	// 支持域名
 	boost::asio::ip::tcp::resolver nresolver(m_ioservice);
@@ -604,7 +508,7 @@ bool RedisSync::_Connect()
 	}
 
 	std::stringstream cmdbuff;
-	_FormatCommand(buff, cmdbuff);
+	FormatCommand(buff, cmdbuff);
 	
 	boost::asio::write(m_socket, boost::asio::buffer(cmdbuff.str()), boost::asio::transfer_all(), ec);
 	if (ec)
@@ -615,9 +519,7 @@ bool RedisSync::_Connect()
 	}
 
 	RedisResult rst;
-	std::vector<char> readbuff;
-	int pos = 0;
-	if (_ReadReply(rst, readbuff, pos) != 1)
+	if (ReadReply(rst) != 1)
 	{
 		m_socket.close(ec);
 		LogError("RedisSync Maybe Not Valid Redis Address, host=%s port=%d", m_host.c_str(), (int)m_port);
@@ -630,24 +532,15 @@ bool RedisSync::_Connect()
 		return false;
 	}
 
-	LogError("RedisSync Connect Success, host=%s port=%d", m_host.c_str(), (int)m_port);
+	LogInfo("RedisSync Connect Success, host=%s port=%d", m_host.c_str(), (int)m_port);
 	m_bconnected = true;
+	
+	ClearRecvBuff();
+
 	return true;
 }
 
-void RedisSync::_Close()
-{
-	boost::system::error_code ec;
-	if (m_socket.is_open())
-	{
-		m_socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-		m_socket.close(ec);
-	}
-	m_bconnected = false;
-	m_subscribe = false; // 断开连接订阅肯定就不能用了
-}
-
-bool RedisSync::_CheckConnect()
+bool RedisSync::CheckConnect()
 {
 	// 如果没有连接先尝试连接下
 	if (!m_bconnected)
@@ -655,7 +548,7 @@ bool RedisSync::_CheckConnect()
 		// 如果ip不为空 重新连接下
 		if (!m_host.empty())
 		{
-			if (!_Connect())
+			if (!Connect())
 			{
 				return false;
 			}
@@ -669,7 +562,7 @@ bool RedisSync::_CheckConnect()
 	return true;
 }
 
-bool RedisSync::_DoCommand(const std::vector<std::string>& buff, RedisResult& rst)
+bool RedisSync::DoCommand(const std::vector<std::string>& buff, RedisResult& rst)
 {
 	if (m_subscribe)
 	{
@@ -680,42 +573,36 @@ bool RedisSync::_DoCommand(const std::vector<std::string>& buff, RedisResult& rs
 	if (m_pipeline)
 	{
 		// 开启了管道 命令写入管道buff
-		_FormatCommand(buff, m_pipecmdbuff);
+		FormatCommand(buff, m_pipecmdbuff);
 		m_pipecmdcount++;
 		return false;
 	}
 	
 	std::stringstream cmdbuff;
-	_FormatCommand(buff, cmdbuff);
+	FormatCommand(buff, cmdbuff);
 
-	if (!_SendCommand(cmdbuff.str()))
+	if (!SendCommand(cmdbuff.str()))
 	{
 		return false;
 	}
 
-	std::vector<char> readbuff;
-	readbuff.reserve(512);
-	int pos = 0;
-	if (_ReadReply(rst, readbuff, pos) != 1)
+	ClearRecvBuff();
+
+	if (ReadReply(rst) != 1)
 	{
-		_Close();
+		Close();
 		return false;
+	}
+	if (rst.IsError())
+	{
+		LogError("Redis %s", rst.ToString().c_str());
 	}
 	return true;
 }
 
-void RedisSync::_FormatCommand(const std::vector<std::string>& buff, std::stringstream &cmdbuff)
+bool RedisSync::SendCommand(const std::string& cmdbuff)
 {
-	cmdbuff << "*" << buff.size() << "\r\n";
-	for (auto it = buff.begin(); it != buff.end(); ++it)
-	{
-		cmdbuff << "$" << it->size() << "\r\n" << *it << "\r\n";
-	}
-}
-
-bool RedisSync::_SendCommand(const std::string& cmdbuff)
-{
-	if (!_CheckConnect())
+	if (!CheckConnect())
 	{
 		return false;
 	}
@@ -725,7 +612,7 @@ bool RedisSync::_SendCommand(const std::string& cmdbuff)
 	if (ec)
 	{
 		// 尝试连接下
-		if (!_Connect())
+		if (!Connect())
 		{
 			return false;
 		}
@@ -739,157 +626,23 @@ bool RedisSync::_SendCommand(const std::string& cmdbuff)
 	return true;
 }
 
-int RedisSync::_ReadReply(RedisResult& rst, std::vector<char>& buff, int& pos)
-{
-	int len = _ReadByCRLF(buff,pos);
-	if (len <= 0)
-	{
-		return len;
-	}
-
-	char type = buff[pos];
-	len -= 1;
-	pos += 1;
-	switch (type)
-	{
-		case '+':
-		{
-			rst.v = std::string(&buff[pos], &buff[pos + len]);
-
-			pos += len;
-			pos += 2; // \r\n
-			break;
-		}
-		case '-':
-		{
-			rst.v = std::string(&buff[pos], &buff[pos + len]);
-			rst.error = true;
-			LogError("Redis %s", rst.ToString().c_str());
-
-			pos += len;
-			pos += 2; // \r\n
-			break;
-		}
-		case ':':
-		{
-			buff[pos + len] = '\0';
-			char* p = &buff[pos];
-			rst.v = atoll(p);
-			buff[pos + len] = '\r';
-
-			pos += len;
-			pos += 2; // \r\n
-			break;
-		}
-		case '$':
-		{
-			buff[pos + len] = '\0';
-			char* p = &buff[pos];
-			int strlen = atoi(p);
-			buff[pos + len] = '\r';
-
-			pos += len;
-			pos += 2; // \r\n
-
-			if (strlen < 0)
-			{
-				// nil
-			}
-			else if (strlen == 0)
-			{
-				rst.v = std::string("");
-				pos += 2; // \r\n
-			}
-			else
-			{
-				int len = _ReadByLen(strlen+2, buff, pos); // +2表示保证读取到网络缓存中的\r\n
-				if (len <= 0)
-				{
-					return len;
-				}
-
-				rst.v = std::string(&buff[pos], strlen);
-
-				pos += strlen;
-				pos += 2; // \r\n
-			}
-			break;
-		}
-		case '*':
-		{
-			buff[pos + len] = '\0';
-			char* p = &buff[pos];
-			int size = atoi(p);
-			buff[pos + len] = '\r';
-
-			pos += len;
-			pos += 2; // \r\n
-
-			rst.v = RedisResult::Array();
-			RedisResult::Array* pArray = boost::any_cast<RedisResult::Array >(&rst.v);
-			for (int i =0; i < size; ++i)
-			{
-				RedisResult rst2;
-				if (_ReadReply(rst2, buff, pos) != 1)
-				{
-					return -1;
-				}
-				pArray->push_back(rst2);
-			}
-			break;
-		}
-		default:
-		{
-			return -1;
-		}
-	}
-	
-	return 1;
-}
-
-int RedisSync::_ReadByCRLF(std::vector<char>& buff, int pos)
-{
-	do 
-	{
-		for (int i = pos; i < (int)buff.size()-1; ++i)
-		{
-			if (memcmp(&buff[i], "\r\n", 2) == 0)
-			{
-				return i- pos;
-			}
-		}
-
-		boost::array<char, 512> inbuff;
-		boost::system::error_code ec;
-		size_t size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
-		if (ec)
-		{
-			if (ec == boost::asio::error::would_block)
-			{
-				// 非阻塞socket
-				return 0;
-			}
-			LogError("RedisSync Read Error, %s", ec.message().c_str());
-			return -1;
-		}
-		if ( size > 0 )
-		{
-			buff.insert(buff.end(), inbuff.begin(), inbuff.begin() + size);
-			continue;
-		}
-		break;
-	} while (true);
-
-	return 0;
-}
-
-int RedisSync::_ReadByLen(int len, std::vector<char>& buff, int pos)
+int RedisSync::ReadToCRLF(char** buff, int mindatalen)
 {
 	do
 	{
-		if ((int)buff.size()- pos >= len)
+		int pos = m_recvpos + mindatalen;
+		if ((int)m_recvbuff.size() >= pos + 2)
 		{
-			return len;
+			for (int i = pos; i < (int)m_recvbuff.size() - 1; ++i)
+			{
+				if (memcmp(&m_recvbuff[i], "\r\n", 2) == 0)
+				{
+					*buff = &m_recvbuff[m_recvpos];
+					int size = i + 2 - m_recvpos;
+					m_recvpos += size;
+					return size;
+				}
+			}
 		}
 
 		boost::array<char, 512> inbuff;
@@ -907,13 +660,33 @@ int RedisSync::_ReadByLen(int len, std::vector<char>& buff, int pos)
 		}
 		if (size > 0)
 		{
-			buff.insert(buff.end(), inbuff.begin(), inbuff.begin() + size);
+			m_recvbuff.insert(m_recvbuff.end(), inbuff.begin(), inbuff.begin() + size);
 			continue;
 		}
 		break;
 	} while (true);
 
 	return 0;
+}
+
+void RedisSync::ClearRecvBuff()
+{
+	m_recvbuff.clear();
+	m_recvpos = 0;
+}
+
+void RedisSync::ResetRecvBuff()
+{
+	if ((int)m_recvbuff.size() > m_recvpos && m_recvpos != 0)
+	{
+		std::vector<char> buff = std::vector<char>(m_recvbuff.begin() + m_recvpos, m_recvbuff.end());
+		m_recvbuff.swap(buff);
+	}
+	else
+	{
+		m_recvbuff.clear();
+	}
+	m_recvpos = 0;
 }
 
 int RedisSync::Del(const std::string& key)
@@ -923,7 +696,7 @@ int RedisSync::Del(const std::string& key)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -939,7 +712,7 @@ int RedisSync::Del(const std::string& key)
 	return 0;
 }
 
-int RedisSync::Del(int cnt, ...)
+int RedisSync::Dels(int cnt, ...)
 {
 	std::vector<std::string> buff;
 	buff.push_back("DEL");
@@ -953,7 +726,7 @@ int RedisSync::Del(int cnt, ...)
 	va_end(ap);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -976,7 +749,7 @@ int RedisSync::Exists(const std::string& key)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1000,7 +773,7 @@ int RedisSync::Expire(const std::string& key, long long value)
 	buff.push_back(std::to_string(value));
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1024,7 +797,7 @@ int RedisSync::ExpireAt(const std::string& key, long long value)
 	buff.push_back(std::to_string(value));
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1048,7 +821,7 @@ int RedisSync::PExpire(const std::string& key, long long value)
 	buff.push_back(std::to_string(value));
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1072,7 +845,7 @@ int RedisSync::PExpireAt(const std::string& key, long long value)
 	buff.push_back(std::to_string(value));
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1095,7 +868,7 @@ int RedisSync::TTL(const std::string& key, long long& value)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1119,7 +892,7 @@ int RedisSync::PTTL(const std::string& key, long long& value)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1153,7 +926,7 @@ int RedisSync::Set(const std::string& key, const std::string& value, unsigned in
 	}
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1192,7 +965,7 @@ int RedisSync::Get(const std::string& key, std::string& value)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1262,7 +1035,7 @@ int RedisSync::MSet(const std::map<std::string, std::string>& kvs)
 	}
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1290,7 +1063,7 @@ int RedisSync::MSet(const std::map<std::string, int>& kvs)
 	}
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1318,7 +1091,7 @@ int RedisSync::MSet(const std::map<std::string, float>& kvs)
 	}
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1346,7 +1119,7 @@ int RedisSync::MSet(const std::map<std::string, double>& kvs)
 	}
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1378,7 +1151,7 @@ int RedisSync::MSet(int cnt, ...)
 	va_end(ap);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1405,7 +1178,7 @@ int RedisSync::MGet(const std::vector<std::string>& keys, RedisResult& rst)
 		buff.push_back(*it);
 	}
 
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1427,6 +1200,91 @@ int RedisSync::MGet(const std::vector<std::string>& keys, RedisResult& rst)
 	return 0;
 }
 
+int RedisSync::Incr(const std::string& key, long long& svalue)
+{
+	std::vector<std::string> buff;
+	buff.push_back("INCR");
+	buff.push_back(key);
+
+	RedisResult rst;
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsInt())
+	{
+		svalue = rst.ToLongLong();
+		return 1;
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
+
+int RedisSync::Incr(const std::string& key, int& svalue)
+{
+	long long svalue2 = 0;
+	int rst = Incr(key, svalue2);
+	if (rst == 1)
+	{
+		svalue = int(svalue2);
+	}
+	return rst;
+}
+
+int RedisSync::Incr(const std::string& key)
+{
+	long long svalue = 0;
+	return Incr(key, svalue);
+}
+
+int RedisSync::Incrby(const std::string& key, int value, long long& svalue)
+{
+	std::vector<std::string> buff;
+	buff.push_back("INCRBY");
+	buff.push_back(key);
+	buff.push_back(std::to_string(value));
+
+	RedisResult rst;
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsInt())
+	{
+		svalue = rst.ToLongLong();
+		return 1;
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
+
+int RedisSync::Incrby(const std::string& key, int value, int& svalue)
+{
+	long long svalue2 = 0;
+	int rst = Incrby(key, value, svalue2);
+	if (rst == 1)
+	{
+		svalue = int(svalue2);
+	}
+	return rst;
+}
+
+int RedisSync::Incrby(const std::string& key, int value)
+{
+	long long svalue = 0;
+	return Incrby(key, value, svalue);
+}
+
 int RedisSync::HSet(const std::string& key, const std::string& field, const std::string& value)
 {
 	std::vector<std::string> buff;
@@ -1436,7 +1294,7 @@ int RedisSync::HSet(const std::string& key, const std::string& field, const std:
 	buff.push_back(value);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1476,7 +1334,7 @@ int RedisSync::HGet(const std::string& key, const std::string& field, std::strin
 	buff.push_back(field);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1535,6 +1393,261 @@ int RedisSync::HGet(const std::string& key, const std::string& field, double& va
 	return 1;
 }
 
+
+int RedisSync::HMSet(const std::string& key, const std::map<std::string, std::string>& kvs)
+{
+	std::vector<std::string> buff;
+	buff.push_back("HMSET");
+	buff.push_back(key);
+	for (auto it = kvs.begin(); it != kvs.end(); ++it)
+	{
+		buff.push_back(it->first);
+		buff.push_back(it->second);
+	}
+
+	RedisResult rst;
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		// 未设置成功
+		return 0;
+	}
+	return 1;
+}
+
+int RedisSync::HMSet(const std::string& key, const std::map<std::string, int>& kvs)
+{
+	std::vector<std::string> buff;
+	buff.push_back("HMSET");
+	buff.push_back(key);
+	for (auto it = kvs.begin(); it != kvs.end(); ++it)
+	{
+		buff.push_back(it->first);
+		buff.push_back(std::to_string(it->second));
+	}
+
+	RedisResult rst;
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		// 未设置成功
+		return 0;
+	}
+	return 1;
+}
+
+int RedisSync::HMSet(const std::string& key, const std::map<std::string, float>& kvs)
+{
+	std::vector<std::string> buff;
+	buff.push_back("HMSET");
+	buff.push_back(key);
+	for (auto it = kvs.begin(); it != kvs.end(); ++it)
+	{
+		buff.push_back(it->first);
+		buff.push_back(std::to_string(it->second));
+	}
+
+	RedisResult rst;
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		// 未设置成功
+		return 0;
+	}
+	return 1;
+}
+
+int RedisSync::HMSet(const std::string& key, const std::map<std::string, double>& kvs)
+{
+	std::vector<std::string> buff;
+	buff.push_back("HMSET");
+	buff.push_back(key);
+	for (auto it = kvs.begin(); it != kvs.end(); ++it)
+	{
+		buff.push_back(it->first);
+		buff.push_back(std::to_string(it->second));
+	}
+
+	RedisResult rst;
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		// 未设置成功
+		return 0;
+	}
+	return 1;
+}
+
+int RedisSync::HMSet(const std::string& key, int cnt, ...)
+{
+	std::vector<std::string> buff;
+	buff.push_back("HMSET");
+	buff.push_back(key);
+
+	va_list ap;
+	va_start(ap, cnt);
+	for (int i = 0; i < cnt; ++i)
+	{
+		buff.push_back(va_arg(ap, const char*));
+		buff.push_back(va_arg(ap, const char*));
+	}
+	va_end(ap);
+
+	RedisResult rst;
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		// 未设置成功
+		return 0;
+	}
+	return 1;
+}
+
+int RedisSync::HMGet(const std::string& key, const std::vector<std::string>& fields, RedisResult& rst)
+{
+	std::vector<std::string> buff;
+	buff.push_back("HMGET");
+	buff.push_back(key);
+
+	for (auto it = fields.begin(); it != fields.end(); ++it)
+	{
+		buff.push_back(*it);
+	}
+
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		// 未获取到值
+		return 0;
+	}
+	if (rst.IsArray())
+	{
+		return 1;
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
+
+int RedisSync::HGetAll(const std::string& key, RedisResult& rst)
+{
+	std::vector<std::string> buff;
+	buff.push_back("HGETALL");
+	buff.push_back(key);
+
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		// 未获取到值
+		return 0;
+	}
+	if (rst.IsArray())
+	{
+		return 1;
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
+
+int RedisSync::HIncrby(const std::string& key, const std::string& field, int value, long long& svalue)
+{
+	std::vector<std::string> buff;
+	buff.push_back("HINCRBY");
+	buff.push_back(key);
+	buff.push_back(field);
+	buff.push_back(std::to_string(value));
+
+	RedisResult rst;
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsInt())
+	{
+		svalue = rst.ToLongLong();
+		return 1;
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
+
+int RedisSync::HIncrby(const std::string& key, const std::string& field, int value, int& svalue)
+{
+	long long svalue2 = 0;
+	int rst = HIncrby(key, field, value, svalue2);
+	if (rst == 1)
+	{
+		svalue = int(svalue2);
+	}
+	return rst;
+}
+
+int RedisSync::HIncrby(const std::string& key, const std::string& field, int value)
+{
+	long long svalue = 0;
+	return HIncrby(key, field, value, svalue);
+}
+
 int RedisSync::HLen(const std::string& key)
 {
 	std::vector<std::string> buff;
@@ -1542,7 +1655,7 @@ int RedisSync::HLen(const std::string& key)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1566,7 +1679,7 @@ int RedisSync::HExists(const std::string& key, const std::string& field)
 	buff.push_back(field);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1590,7 +1703,7 @@ int RedisSync::HDel(const std::string& key, const std::string& field)
 	buff.push_back(field);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1606,7 +1719,7 @@ int RedisSync::HDel(const std::string& key, const std::string& field)
 	return 0;
 }
 
-int RedisSync::HDel(const std::string& key, int cnt, ...)
+int RedisSync::HDels(const std::string& key, int cnt, ...)
 {
 	std::vector<std::string> buff;
 	buff.push_back("HDEL");
@@ -1621,7 +1734,7 @@ int RedisSync::HDel(const std::string& key, int cnt, ...)
 	va_end(ap);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1645,7 +1758,7 @@ int RedisSync::LPush(const std::string& key, const std::string& value)
 	buff.push_back(value);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1676,7 +1789,7 @@ int RedisSync::LPush(const std::string& key, double value)
 	return LPush(key, std::to_string(value));
 }
 
-int RedisSync::LPush(const std::string& key, int cnt, ...)
+int RedisSync::LPushs(const std::string& key, int cnt, ...)
 {
 	std::vector<std::string> buff;
 	buff.push_back("LPUSH");
@@ -1691,7 +1804,7 @@ int RedisSync::LPush(const std::string& key, int cnt, ...)
 	va_end(ap);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1715,7 +1828,7 @@ int RedisSync::RPush(const std::string& key, const std::string& value)
 	buff.push_back(value);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1746,7 +1859,7 @@ int RedisSync::RPush(const std::string& key, double value)
 	return RPush(key, std::to_string(value));
 }
 
-int RedisSync::RPush(const std::string& key, int cnt, ...)
+int RedisSync::RPushs(const std::string& key, int cnt, ...)
 {
 	std::vector<std::string> buff;
 	buff.push_back("RPUSH");
@@ -1761,7 +1874,7 @@ int RedisSync::RPush(const std::string& key, int cnt, ...)
 	va_end(ap);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1790,7 +1903,7 @@ int RedisSync::LPop(const std::string& key, std::string& value)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1819,7 +1932,7 @@ int RedisSync::LPop(const std::string& key, int& value)
 	{
 		return r;
 	}
-	value = (float)atoi(rst.c_str());
+	value = atoi(rst.c_str());
 	return 1;
 }
 
@@ -1860,7 +1973,7 @@ int RedisSync::RPop(const std::string& key, std::string& value)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1889,7 +2002,7 @@ int RedisSync::RPop(const std::string& key, int& value)
 	{
 		return r;
 	}
-	value = (float)atoi(rst.c_str());
+	value = atoi(rst.c_str());
 	return 1;
 }
 
@@ -1925,7 +2038,7 @@ int RedisSync::LRange(const std::string& key, int start, int stop, RedisResult& 
 	buff.push_back(std::to_string(start));
 	buff.push_back(std::to_string(stop));
 
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1954,7 +2067,7 @@ int RedisSync::LRem(const std::string& key, int count, std::string& value)
 	buff.push_back(value);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -1977,7 +2090,7 @@ int RedisSync::LLen(const std::string& key)
 	buff.push_back(key);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -2001,7 +2114,7 @@ int RedisSync::SAdd(const std::string& key, const std::string& value)
 	buff.push_back(value);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -2032,7 +2145,7 @@ int RedisSync::SAdd(const std::string& key, double value)
 	return SAdd(key, std::to_string(value));
 }
 
-int RedisSync::SAdd(const std::string& key, int cnt, ...)
+int RedisSync::SAdds(const std::string& key, int cnt, ...)
 {
 	std::vector<std::string> buff;
 	buff.push_back("SADD");
@@ -2047,7 +2160,7 @@ int RedisSync::SAdd(const std::string& key, int cnt, ...)
 	va_end(ap);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -2071,7 +2184,7 @@ int RedisSync::SRem(const std::string& key, const std::string& value)
 	buff.push_back(value);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -2102,7 +2215,7 @@ int RedisSync::SRem(const std::string& key, double value)
 	return SRem(key, std::to_string(value));
 }
 
-int RedisSync::SRem(const std::string& key, int cnt, ...)
+int RedisSync::SRems(const std::string& key, int cnt, ...)
 {
 	std::vector<std::string> buff;
 	buff.push_back("SREM");
@@ -2117,7 +2230,7 @@ int RedisSync::SRem(const std::string& key, int cnt, ...)
 	va_end(ap);
 
 	RedisResult rst;
-	if (!_DoCommand(buff, rst))
+	if (!DoCommand(buff, rst))
 	{
 		return -1;
 	}
@@ -2131,4 +2244,86 @@ int RedisSync::SRem(const std::string& key, int cnt, ...)
 	}
 	LogError("UnKnown Error");
 	return 0;
+}
+
+int RedisSync::SMembers(const std::string& key, RedisResult& rst)
+{
+	std::vector<std::string> buff;
+	buff.push_back("SMEMBERS");
+	buff.push_back(key);
+
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		return 0;
+	}
+	if (rst.IsArray())
+	{
+		return 1;
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
+
+int RedisSync::Scard(const std::string& key)
+{
+	std::vector<std::string> buff;
+	buff.push_back("SCARD");
+	buff.push_back(key);
+
+	RedisResult rst;
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		return 0;
+	}
+	if (rst.IsInt())
+	{
+		return rst.ToInt();
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
+
+int RedisSync::Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args)
+{
+	RedisResult rst;
+	return Eval(script, keys, args, rst);
+}
+
+int RedisSync::Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst)
+{
+	std::vector<std::string> buff;
+	buff.push_back("EVAL");
+	buff.push_back(script);
+	buff.push_back(std::to_string(keys.size()));
+
+	for (const auto& it : keys)
+	{
+		buff.push_back(it);
+	}
+	for (const auto& it : args)
+	{
+		buff.push_back(it);
+	}
+
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		return 0;
+	}
+	return 1;
 }
