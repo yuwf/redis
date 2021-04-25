@@ -2,106 +2,6 @@
 #include <stdarg.h>
 #include "Redis.h"
 
-RedisResult::RedisResult() : error(false)
-{
-}
-
-bool RedisResult::IsError() const
-{
-	return error;
-}
-
-bool RedisResult::IsNull() const
-{
-	return v.empty();
-}
-
-bool RedisResult::IsInt() const
-{
-	return v.type() == typeid(long long);
-}
-
-bool RedisResult::IsString() const
-{
-	return v.type() == typeid(std::string);
-}
-
-bool RedisResult::IsArray() const
-{
-	return v.type() == typeid(Array);
-}
-
-int RedisResult::ToInt() const
-{
-	if (IsInt())
-	{
-		return (int)boost::any_cast<long long>(v);
-	}
-	return 0;
-}
-
-long long RedisResult::ToLongLong() const
-{
-	if (IsInt())
-	{
-		return boost::any_cast<long long>(v);
-	}
-	return 0;
-}
-
-const std::string& RedisResult::ToString() const
-{
-	if (IsString())
-	{
-		return *boost::any_cast<std::string>(&v);
-	}
-	static std::string empty;
-	return empty;
-}
-
-const RedisResult::Array& RedisResult::ToArray() const
-{
-	if (IsArray())
-	{
-		return *boost::any_cast<Array >(&v);
-	}
-	static Array empty;
-	return empty;
-}
-
-int RedisResult::StringToInt() const
-{
-	if (IsString())
-	{
-		return atoi(boost::any_cast<std::string>(v).c_str());
-	}
-	return 0;
-}
-
-float RedisResult::StringToFloat() const
-{
-	if (IsString())
-	{
-		return (float)atof(boost::any_cast<std::string>(v).c_str());
-	}
-	return 0.0f;
-}
-
-double RedisResult::StringToDouble() const
-{
-	if (IsString())
-	{
-		return atof(boost::any_cast<std::string>(v).c_str());
-	}
-	return 0.0f;
-}
-
-void RedisResult::Clear()
-{
-	v.clear();
-	error = false;
-}
-
 Redis::Redis()
 {
 }
@@ -109,15 +9,6 @@ Redis::Redis()
 Redis::~Redis()
 {
 
-}
-
-void Redis::FormatCommand(const std::vector<std::string>& buff, std::stringstream &cmdbuff)
-{
-	cmdbuff << "*" << buff.size() << "\r\n";
-	for (auto it = buff.begin(); it != buff.end(); ++it)
-	{
-		cmdbuff << "$" << it->size() << "\r\n" << *it << "\r\n";
-	}
 }
 
 int Redis::ReadReply(RedisResult& rst)
@@ -162,15 +53,11 @@ int Redis::ReadReply(RedisResult& rst)
 			{
 				// nil
 			}
-			else if (strlen == 0)
-			{
-				rst.v = std::string("");
-			}
 			else
 			{
 				char* buff2 = NULL;
 				int len = ReadToCRLF(&buff2, strlen);
-				if (len <= 0)
+				if (len < 0)
 				{
 					return len;
 				}
@@ -181,8 +68,14 @@ int Redis::ReadReply(RedisResult& rst)
 				{
 					return -1;
 				}
-
-				rst.v = std::string(&buff2[0], strlen);
+				if (len == 0)
+				{
+					rst.v = std::string("");
+				}
+				else
+				{
+					rst.v = std::string(&buff2[0], strlen);
+				}
 			}
 			break;
 		}
@@ -213,4 +106,139 @@ int Redis::ReadReply(RedisResult& rst)
 	}
 	
 	return 1;
+}
+
+void Redis::FormatCommand(const std::vector<std::string>& buff, std::stringstream &cmdbuff)
+{
+	cmdbuff << "*" << buff.size() << "\r\n";
+	for (auto it = buff.begin(); it != buff.end(); ++it)
+	{
+		cmdbuff << "$" << it->size() << "\r\n" << *it << "\r\n";
+	}
+}
+
+RedisResult::RedisResult() : error(false)
+{
+}
+
+bool RedisResult::IsError() const
+{
+	return error;
+}
+
+bool RedisResult::IsNull() const
+{
+	return v.empty();
+}
+
+bool RedisResult::IsInt() const
+{
+	return v.type() == typeid(long long);
+}
+
+bool RedisResult::IsString() const
+{
+	return v.type() == typeid(std::string);
+}
+
+bool RedisResult::IsArray() const
+{
+	return v.type() == typeid(Array);
+}
+
+bool RedisResult::IsEmptyArray() const
+{
+	if (v.type() == typeid(Array))
+	{
+		return boost::any_cast<Array>(&v)->empty();
+	}
+	return false;
+}
+
+int RedisResult::ToInt() const
+{
+	if (IsInt())
+	{
+		return (int)boost::any_cast<long long>(v);
+	}
+	if (IsString())
+	{
+		return StringToInt();
+	}
+	return 0;
+}
+
+long long RedisResult::ToLongLong() const
+{
+	if (IsInt())
+	{
+		return boost::any_cast<long long>(v);
+	}
+	if (IsString())
+	{
+		return StringToLongLong();
+	}
+	return 0;
+}
+
+const std::string& RedisResult::ToString() const
+{
+	if (IsString())
+	{
+		return *boost::any_cast<std::string>(&v);
+	}
+	static std::string empty;
+	return empty;
+}
+
+const RedisResult::Array& RedisResult::ToArray() const
+{
+	if (IsArray())
+	{
+		return *boost::any_cast<Array>(&v);
+	}
+	static Array empty;
+	return empty;
+}
+
+void RedisResult::Clear()
+{
+	v.clear();
+	error = false;
+}
+
+int RedisResult::StringToInt() const
+{
+	if (IsString())
+	{
+		return atoi(boost::any_cast<std::string>(v).c_str());
+	}
+	return 0;
+}
+
+long long RedisResult::StringToLongLong() const
+{
+	if (IsString())
+	{
+		return strtoll(boost::any_cast<std::string>(v).c_str(), NULL, 10);
+	}
+	return 0;
+}
+
+float RedisResult::StringToFloat() const
+{
+	if (IsString())
+	{
+		return (float)atof(boost::any_cast<std::string>(v).c_str());
+	}
+	return 0.0f;
+}
+
+double RedisResult::StringToDouble() const
+{
+	if (IsString())
+	{
+		return atof(boost::any_cast<std::string>(v).c_str());
+	}
+	return 0.0f;
 }

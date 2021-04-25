@@ -1,7 +1,8 @@
 ﻿
 #include "RedisAsync.h"
 
-#define LogError
+#include "LLog.h"
+#define LogError LLOG_ERROR
 
 RedisAsync::RedisAsync()
 {
