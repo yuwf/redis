@@ -175,9 +175,18 @@ public:
 
 	// INCRBY命令
 	// 返回1成功 0不成功 -1表示网络或其他错误 svalue表示成功后的值
-	int Incrby(const std::string& key, int value, long long& svalue);
-	int Incrby(const std::string& key, int value, int& svalue);
-	int Incrby(const std::string& key, int value);
+	int Incrby(const std::string& key, long long value, long long& svalue);
+	int Incrby(const std::string& key, long long value);
+	template<class Value>
+	int Incrby(const std::string& key, Value value, long long& svalue)
+	{
+		return Incrby(key, (long long)value, svalue);
+	}
+	template<class Value>
+	int Incrby(const std::string& key, Value value)
+	{
+		return Incrby(key, (long long)value);
+	}
 
 	// HSET命令
 	// 返回1成功 0不成功 -1表示网络或其他错误
@@ -280,16 +289,25 @@ public:
 
 	// HINCRBY命令
 	// 返回1成功 0不成功 -1表示网络或其他错误 svalue表示成功后的值
-	int HIncrby(const std::string& key, const std::string& field, int value, long long& svalue);
-	int HIncrby(const std::string& key, const std::string& field, int value, int& svalue);
-	int HIncrby(const std::string& key, const std::string& field, int value);
-
+	int HIncrby(const std::string& key, const std::string& field, long long value, long long& svalue);
+	int HIncrby(const std::string& key, const std::string& field, long long value);
+	template<class Field, class Value>
+	int HIncrby(const std::string& key, const Field& field, Value value, long long& svalue)
+	{
+		return HIncrby(key, Redis::to_string(field), (long long)value, svalue);
+	}
+	template<class Field, class Value>
+	int HIncrby(const std::string& key, const Field& field, Value value)
+	{
+		return HIncrby(key, Redis::to_string(field), (long long)value);
+	}
+	
 	// HLEN命令
 	// 返回列表长度 0不成功 -1表示网络或其他错误
 	int HLen(const std::string& key);
 
 	// HSCAN
-	// 返回1成功 0不成功 -1表示网络或其他错误 svalue表示成功后的值
+	// 返回1成功 0不成功 -1表示网络或其他错误
 	// 返回值已经过滤cursor数据 只有数据部分
 	int HScan(const std::string& key, int cursor, const std::string& match, int count, int& rstcursor, RedisResult& rst);
 	template<class FieldValueMap>
@@ -462,6 +480,20 @@ public:
 		return SRems(key, values_);
 	}
 
+	// SINTER命令
+	// 1成功 0不成功 -1表示网络或其他错误
+	int Sinter(const std::vector<std::string>& keys, RedisResult& rst);
+	template<class ValueList>
+	int Sinter(const std::vector<std::string>& keys, ValueList& rst)
+	{
+		RedisResult rst_;
+		int r = Sinter(keys, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToArray(rst);
+		return 1;
+	}
+
 	// SMEMBERS命令
 	// 1成功 0不成功 -1表示网络或其他错误
 	// 若成功 rst为数组 元素为string
@@ -494,6 +526,15 @@ public:
 	// 1成功 0不成功 -1表示网络或其他错误
 	int Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args);
 	int Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst);
+
+	// EVALSHA命令
+	// 1成功 0不成功 -1表示网络或其他错误
+	int Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args);
+	int Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst);
+
+	// SCRIPT LOAD命令
+	// 1成功 0不成功 -1表示网络或其他错误
+	int ScriptLoad(const std::string& script, std::string& sha1);
 };
 
 class RedisSyncPipeline
@@ -547,7 +588,12 @@ public:
 	RedisResultBind& Incr(const std::string& key); // int 最新值
 	
 	// INCRBY命令
-	RedisResultBind& Incrby(const std::string& key, int value); // int 最新值
+	RedisResultBind& Incrby(const std::string& key, long long value); // long long 最新值
+	template<class Value>
+	RedisResultBind& Incrby(const std::string& key, Value value)
+	{
+		return Incrby(key, (long long)value);
+	}
 
 	// HSET命令
 	RedisResultBind& HSet(const std::string& key, const std::string& field, const std::string& value); // string OK
@@ -605,7 +651,12 @@ public:
 	RedisResultBind& MHGetAll(const std::vector<std::string>& keys); // string两维数组
 
 	// HINCRBY命令
-	RedisResultBind& HIncrby(const std::string& key, const std::string& field, int value); // int 最新值
+	RedisResultBind& HIncrby(const std::string& key, const std::string& field, long long value); // int 最新值
+	template<class Field, class Value>
+	RedisResultBind& HIncrby(const std::string& key, const Field& field, Value value)
+	{
+		return HIncrby(key, Redis::to_string(field), (long long)value);
+	}
 
 	// HLEN命令
 	RedisResultBind& HLen(const std::string& key); // int 最新值
@@ -623,7 +674,7 @@ public:
 
 	// HEDL命令
 	RedisResultBind& HDel(const std::string& key, const std::string& field); // int 删除个数
-	RedisResultBind& HDel(const std::string& key, const std::vector<std::string>& fields);
+	RedisResultBind& HDels(const std::string& key, const std::vector<std::string>& fields);
 	template<class Field>
 	RedisResultBind& HDel(const std::string& key, const Field& field)
 	{
@@ -731,6 +782,9 @@ public:
 		return SRems(key, values_);
 	}
 
+	// SINTER命令
+	RedisResultBind& Sinter(const std::vector<std::string>& keys); // string数组
+
 	// SMEMBERS命令
 	RedisResultBind& SMembers(const std::string& key); // string数组
 
@@ -747,6 +801,12 @@ public:
 
 	// EVAL命令
 	RedisResultBind& Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args); // 根据返回值来绑定
+
+	// EVALSHA命令
+	RedisResultBind& Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args); // 根据返回值来绑定
+
+	// SCRIPT LOAD命令
+	RedisResultBind& ScriptLoad(const std::string& script);
 
 	// 执行批处理
 	bool Do();

@@ -397,7 +397,26 @@ bool RedisSync::Connect()
 			continue;
 		}
 		
-		//int nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_CONNECT_TIME, (const char*)&timeout, sizeof(timeout));
+#if defined(_WIN32)
+		DWORD conntimeout = 8000;
+		DWORD sendtimeout = 4000;
+		DWORD recvtimeout = 4000;
+#else
+		struct timeval conntimeout;
+		conntimeout.tv_sec = 8;
+		conntimeout.tv_usec = 0;
+		struct timeval sendtimeout;
+		sendtimeout.tv_sec = 4;
+		sendtimeout.tv_usec = 0;
+		struct timeval recvtimeout;
+		recvtimeout.tv_sec = 4;
+		recvtimeout.tv_usec = 0;
+#endif
+		int nRet = 0;
+		// 设置超时 连接超时好像一直失败 在linux下没有SO_CONNECT_TIME
+		//nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_CONNECT_TIME, (const char*)&conntimeout, sizeof(conntimeout));
+		nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_SNDTIMEO, (const char*)&sendtimeout, sizeof(sendtimeout));
+		nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_RCVTIMEO, (const char*)&recvtimeout, sizeof(recvtimeout));
 
 		m_socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
 		m_socket.set_option(boost::asio::socket_base::keep_alive(true), ec);
@@ -1045,7 +1064,7 @@ int RedisSync::Incr(const std::string& key)
 	return Incr(key, svalue);
 }
 
-int RedisSync::Incrby(const std::string& key, int value, long long& svalue)
+int RedisSync::Incrby(const std::string& key, long long value, long long& svalue)
 {
 	std::vector<std::string> buff;
 	buff.push_back("INCRBY");
@@ -1071,18 +1090,7 @@ int RedisSync::Incrby(const std::string& key, int value, long long& svalue)
 	return 0;
 }
 
-int RedisSync::Incrby(const std::string& key, int value, int& svalue)
-{
-	long long svalue2 = 0;
-	int rst = Incrby(key, value, svalue2);
-	if (rst == 1)
-	{
-		svalue = int(svalue2);
-	}
-	return rst;
-}
-
-int RedisSync::Incrby(const std::string& key, int value)
+int RedisSync::Incrby(const std::string& key, long long value)
 {
 	long long svalue = 0;
 	return Incrby(key, value, svalue);
@@ -1291,7 +1299,7 @@ int RedisSync::HGetAll(const std::string& key, RedisResult& rst)
 	return 0;
 }
 
-int RedisSync::HIncrby(const std::string& key, const std::string& field, int value, long long& svalue)
+int RedisSync::HIncrby(const std::string& key, const std::string& field, long long value, long long& svalue)
 {
 	std::vector<std::string> buff;
 	buff.push_back("HINCRBY");
@@ -1318,18 +1326,7 @@ int RedisSync::HIncrby(const std::string& key, const std::string& field, int val
 	return 0;
 }
 
-int RedisSync::HIncrby(const std::string& key, const std::string& field, int value, int& svalue)
-{
-	long long svalue2 = 0;
-	int rst = HIncrby(key, field, value, svalue2);
-	if (rst == 1)
-	{
-		svalue = int(svalue2);
-	}
-	return rst;
-}
-
-int RedisSync::HIncrby(const std::string& key, const std::string& field, int value)
+int RedisSync::HIncrby(const std::string& key, const std::string& field, long long value)
 {
 	long long svalue = 0;
 	return HIncrby(key, field, value, svalue);
@@ -1856,6 +1853,40 @@ int RedisSync::SRems(const std::string& key, const std::vector<std::string>& val
 	return 0;
 }
 
+int RedisSync::Sinter(const std::vector<std::string>& keys, RedisResult& rst)
+{
+	if (keys.empty())
+	{
+		return 0;
+	}
+
+	std::vector<std::string> buff;
+	buff.push_back("SINTER");
+	for (const auto& it : keys)
+	{
+		buff.push_back(it);
+	}
+
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		return 0;
+	}
+	if (rst.IsArray())
+	{
+		return 1;
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
+
 int RedisSync::SMembers(const std::string& key, RedisResult& rst)
 {
 	std::vector<std::string> buff;
@@ -1960,6 +1991,70 @@ int RedisSync::Eval(const std::string& script, const std::vector<std::string>& k
 		return 0;
 	}
 	return 1;
+}
+
+int RedisSync::Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args)
+{
+	RedisResult rst;
+	return Evalsha(script, keys, args, rst);
+}
+
+int RedisSync::Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst)
+{
+	std::vector<std::string> buff;
+	buff.push_back("EVALSHA");
+	buff.push_back(script);
+	buff.push_back(std::to_string(keys.size()));
+
+	for (const auto& it : keys)
+	{
+		buff.push_back(it);
+	}
+	for (const auto& it : args)
+	{
+		buff.push_back(it);
+	}
+
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		return 0;
+	}
+	return 1;
+}
+
+int RedisSync::ScriptLoad(const std::string& script, std::string& sha1)
+{
+	std::vector<std::string> buff;
+	buff.push_back("SCRIPT");
+	buff.push_back("LOAD");
+	buff.push_back(script);
+
+	RedisResult rst;
+	if (!DoCommand(buff, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		// 未获取到值
+		return 0;
+	}
+	if (rst.IsString())
+	{
+		sha1 = rst.ToString();
+		return 1;
+	}
+	LogError("UnKnown Error");
+	return 0;
 }
 
 RedisResultBind& RedisSyncPipeline::Command(const std::string& cmd)
@@ -2230,7 +2325,7 @@ RedisResultBind& RedisSyncPipeline::Incr(const std::string& key)
 	return m_binds.back();
 }
 
-RedisResultBind& RedisSyncPipeline::Incrby(const std::string& key, int value)
+RedisResultBind& RedisSyncPipeline::Incrby(const std::string& key, long long value)
 {
 	std::vector<std::string> buff;
 	buff.push_back("INCRBY");
@@ -2435,7 +2530,7 @@ RedisResultBind& RedisSyncPipeline::MHGetAll(const std::vector<std::string>& key
 	return bindptr->m_bind;
 }
 
-RedisResultBind& RedisSyncPipeline::HIncrby(const std::string& key, const std::string& field, int value)
+RedisResultBind& RedisSyncPipeline::HIncrby(const std::string& key, const std::string& field, long long value)
 {
 	std::vector<std::string> buff;
 	buff.push_back("HINCRBY");
@@ -2510,7 +2605,7 @@ RedisResultBind& RedisSyncPipeline::HDel(const std::string& key, const std::stri
 	return m_binds.back();
 }
 
-RedisResultBind& RedisSyncPipeline::HDel(const std::string& key, const std::vector<std::string>& fields)
+RedisResultBind& RedisSyncPipeline::HDels(const std::string& key, const std::vector<std::string>& fields)
 {
 	std::vector<std::string> buff;
 	buff.push_back("HDEL");
@@ -2720,6 +2815,26 @@ RedisResultBind& RedisSyncPipeline::SRems(const std::string& key, const std::vec
 	return m_binds.back();
 }
 
+RedisResultBind& RedisSyncPipeline::Sinter(const std::vector<std::string>& keys)
+{
+	if (keys.empty())
+	{
+		static RedisResultBind empty;
+		return empty;
+	}
+	std::vector<std::string> buff;
+	buff.push_back("SINTER");
+	for (const auto& it : keys)
+	{
+		buff.push_back(it);
+	}
+
+	Redis::FormatCommand(buff, m_cmdbuff);
+
+	m_binds.push_back(RedisResultBind());
+	return m_binds.back();
+}
+
 RedisResultBind& RedisSyncPipeline::SMembers(const std::string& key)
 {
 	std::vector<std::string> buff;
@@ -2772,6 +2887,41 @@ RedisResultBind& RedisSyncPipeline::Eval(const std::string& script, const std::v
 	{
 		buff.push_back(it);
 	}
+
+	Redis::FormatCommand(buff, m_cmdbuff);
+
+	m_binds.push_back(RedisResultBind());
+	return m_binds.back();
+}
+
+RedisResultBind& RedisSyncPipeline::Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args)
+{
+	std::vector<std::string> buff;
+	buff.push_back("EVALSHA");
+	buff.push_back(script);
+	buff.push_back(std::to_string(keys.size()));
+
+	for (const auto& it : keys)
+	{
+		buff.push_back(it);
+	}
+	for (const auto& it : args)
+	{
+		buff.push_back(it);
+	}
+
+	Redis::FormatCommand(buff, m_cmdbuff);
+
+	m_binds.push_back(RedisResultBind());
+	return m_binds.back();
+}
+
+RedisResultBind& RedisSyncPipeline::ScriptLoad(const std::string& script)
+{
+	std::vector<std::string> buff;
+	buff.push_back("SCRIPT");
+	buff.push_back("LOAD");
+	buff.push_back(script);
 
 	Redis::FormatCommand(buff, m_cmdbuff);
 
