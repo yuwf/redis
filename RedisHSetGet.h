@@ -9,6 +9,7 @@
 #include <boost/preprocessor/seq.hpp>
 #include <boost/preprocessor/tuple.hpp>
 #include "RedisSync.h"
+#include "RedisSyncPipeline.h"
 
 inline void RedisStringSplit(const std::string& input, std::vector<std::string>& output, const std::string& delim)
 {

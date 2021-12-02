@@ -13,12 +13,27 @@ Redis::~Redis()
 
 int Redis::ReadReply(RedisResult& rst)
 {
+	m_readreplylen = 0;
+	int r = _ReadReply(rst);
+	if (r == 0 && m_readreplylen > 0)
+	{
+		if (!ReadRollback(m_readreplylen))
+		{
+			return -2;
+		}
+	}
+	return r;
+}
+
+int Redis::_ReadReply(RedisResult& rst)
+{
 	char* buff = NULL;
 	int len = ReadToCRLF(&buff,1);
 	if (len <= 0)
 	{
 		return len;
 	}
+	m_readreplylen += len;
 
 	len -= 2; // 后面的\r\n
 
@@ -57,16 +72,17 @@ int Redis::ReadReply(RedisResult& rst)
 			{
 				char* buff2 = NULL;
 				int len = ReadToCRLF(&buff2, strlen);
-				if (len < 0)
+				if (len <= 0)
 				{
 					return len;
 				}
+				m_readreplylen += len;
 
 				len -= 2; // \r\n
 
 				if (len < strlen)
 				{
-					return -1;
+					return -2;
 				}
 				if (len == 0)
 				{
@@ -91,9 +107,10 @@ int Redis::ReadReply(RedisResult& rst)
 			for (int i = 0; i < size; ++i)
 			{
 				RedisResult rst2;
-				if (ReadReply(rst2) != 1)
+				int r = _ReadReply(rst2);
+				if ( r <= 0 )
 				{
-					return -1;
+					return r;
 				}
 				pArray->push_back(rst2);
 			}
@@ -101,7 +118,7 @@ int Redis::ReadReply(RedisResult& rst)
 		}
 		default:
 		{
-			return -1;
+			return -2;
 		}
 	}
 	

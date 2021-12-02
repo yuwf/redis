@@ -1,6 +1,8 @@
 ﻿#ifndef _REDIS_H_
 #define _REDIS_H_
 
+// by yuwf qingting.water@gmail.com
+
 #include <set>
 #include <string>
 #include <vector>
@@ -17,16 +19,24 @@ protected:
 	Redis();
 	virtual ~Redis();
 
-	// 读取返回值
-	// 该函数通过调用下面的两个虚函数获取数据 获取的数据要求在返回之前一直有效
-	// 返回值 -1 表示网络错误或者解析错误 0 表示未读取到 1 表示读取到了
+	// 该函数通过调用下面的ReadToCRLF获取数据
+	// 注意：ReadToCRLF返回的数据要求ReadReply结束前一直有效
+	// 返回值 -1:网络错误 -2:解析错误 0:未读取到 1:读取到了
 	int ReadReply(RedisResult& rst);
 
-	// 返回值表示长度 buff表示数据地址 -1表示网络读取失败 0表示没有读取到
-	// buff中包括\r\n minlen表示buff中不包括\r\n的最少长度 
+	// buff表示数据地址 buff中包括\r\n minlen表示buff中不包括\r\n的最少长度
+	// 返回值表示buff长度 -1:网络读取失败 0:没有读取到
 	virtual int ReadToCRLF(char** buff, int minlen) = 0;
 
+	// 读取回滚 ReadReply函数通过ReadToCRLF读取的数据不是完整的数据，回滚本次读取
+	virtual bool ReadRollback(int len) = 0;
+
+	int m_readreplylen;
+
 public:
+	// 解释同ReadReply
+	int _ReadReply(RedisResult& rst);
+
 	// 格式化命令
 	static void FormatCommand(const std::vector<std::string>& buff, std::stringstream &cmdbuff);
 
