@@ -12,7 +12,7 @@ public:
 	virtual ~RedisSyncPipeline() {}
 
 	// 字符串命令
-	RedisResultBind& Command(const std::string& cmd); // 绑定值 根据命令来确定
+	RedisResultBind& Command(const std::string& str); // 绑定值 根据命令来确定
 
 	// DEL命令
 	RedisResultBind& Del(const std::string& key);	// int 删除个数
@@ -214,24 +214,14 @@ public:
 	// LLEN命令
 	RedisResultBind& LLen(const std::string& key); // int 长度
 
+	//////////////////////////////////////////////////////////////////////////
 	// SADD命令
-	RedisResultBind& SAdd(const std::string& key, const std::string& value); // int 添加的数量
-	RedisResultBind& SAdds(const std::string& key, const std::vector<std::string>& values);
 	template<class Value>
-	RedisResultBind& SAdd(const std::string& key, const Value& value)
-	{
-		return SAdd(key, Redis::to_string(value));
-	}
+	RedisResultBind& SAdd(const std::string& key, const Value& value); // int 添加的数量
 	template<class ValueList>
-	RedisResultBind& SAdds(const std::string& key, const ValueList& values)
-	{
-		std::vector<std::string> values_;
-		values_.reserve(values.size());
-		for (auto it = values.begin(); it != values.end(); ++it)
-			values_.emplace_back(Redis::to_string(*it));
-		return SAdds(key, values_);
-	}
-
+	RedisResultBind& SAdds(const std::string& key, const ValueList& values); // int 添加的数量
+	// SCARD命令
+	RedisResultBind& SCard(const std::string& key); // int 长度
 	// SREM命令
 	RedisResultBind& SRem(const std::string& key, const std::string& value); // int 移除的数量
 	RedisResultBind& SRems(const std::string& key, const std::vector<std::string>& values);
@@ -264,28 +254,31 @@ public:
 		return SISMember(key, Redis::to_string(value));
 	}
 
-	// SCARD命令
-	RedisResultBind& SCard(const std::string& key); // int 长度
-
+	//////////////////////////////////////////////////////////////////////////
 	// EVAL命令
 	RedisResultBind& Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args); // 根据返回值来绑定
-
 	// EVALSHA命令
-	RedisResultBind& Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args); // 根据返回值来绑定
-
+	RedisResultBind& Evalsha(const std::string& scriptsha1, const std::vector<std::string>& keys, const std::vector<std::string>& args); // 根据返回值来绑定
+	// SCRIPT EXISTS命令
+	RedisResultBind& ScriptExists(const std::string& scriptsha1); // int 1存在 0不存在
+	RedisResultBind& ScriptExists(const std::vector<std::string>& scriptsha1s); // int数组
+	// SCRIPT FLUSH命令
+	RedisResultBind& ScriptFlush(); // string OK
+	// SCRIPT KILL命令
+	RedisResultBind& ScriptKill(); // string OK
 	// SCRIPT LOAD命令
-	RedisResultBind& ScriptLoad(const std::string& script);
+	RedisResultBind& ScriptLoad(const std::string& script); // string script的SHA1校验和
 
 	// 执行批处理
 	bool Do();
-	bool Do(RedisResult::Array& rst);
+	bool Do(std::vector<RedisResult>& rst);
 
 protected:
 	RedisSync& m_redis;
-	std::stringstream m_cmdbuff;
+	std::vector<RedisCommand> m_cmds;
 	std::vector<RedisResultBind> m_binds;
 
-	// 自定义复合命令使用
+	// 自定义复合命令使用 支持绑定多条命令
 	struct _RedisResultBind_
 	{
 		int m_begin = 0;	// 对应m_binds下标
@@ -306,7 +299,6 @@ protected:
 		bool IsEnd(int index) { return index == m_end; }
 	};
 	std::map<int, std::shared_ptr<_RedisResultBind_>> m_binds2; // index对应m_binds下标
-	RedisResult m_result2;
 
 private:
 	// 禁止拷贝
@@ -326,5 +318,34 @@ private:
 	RedisSyncPipeline2(const RedisSyncPipeline2&) = delete;
 	RedisSyncPipeline2& operator=(const RedisSyncPipeline2&) = delete;
 };
+
+template<class Value>
+RedisResultBind& RedisSyncPipeline::SAdd(const std::string& key, const Value& value)
+{
+	m_cmds.push_back(RedisCommand());
+	RedisCommand& cmd = m_cmds.back();
+	cmd.Add("SADD");
+	cmd.Add(key);
+	cmd.Add(value);
+
+	m_binds.push_back(RedisResultBind());
+	return m_binds.back();
+}
+
+template<class ValueList>
+RedisResultBind& RedisSyncPipeline::SAdds(const std::string& key, const ValueList& values)
+{
+	m_cmds.push_back(RedisCommand());
+	RedisCommand& cmd = m_cmds.back();
+	cmd.Add("SADD");
+	cmd.Add(key);
+	for (const auto& it : values)
+	{
+		cmd.Add(Redis::to_string(it));
+	}
+
+	m_binds.push_back(RedisResultBind());
+	return m_binds.back();
+}
 
 #endif

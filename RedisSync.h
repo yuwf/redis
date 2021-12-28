@@ -7,10 +7,9 @@
 #include <boost/asio.hpp>
 #include "Redis.h"
 
-// 同步调用，不支持多线程
-// 除了开启管道外，每个命令函数都支持原子性操作
-// 订阅命令不能和其他非订阅命令一起使用
-
+// 同步调用，不支持多线程，IO默认是阻塞的
+// 订阅命令类型的对象 只能调用SubScribe UnSubScribe Message命令，且IO都是非阻塞的
+// 除订阅外 要保证消息发送和加收的对称性
 class RedisSync : public Redis
 {
 public:
@@ -20,22 +19,21 @@ public:
 	bool InitRedis(const std::string& host, unsigned short port, const std::string& auth = "", int index = 0);
 	void Close();
 
-	// 返回false表示解析失败或者网络读取失败
-	bool Command(const std::string& cmd);
-	bool Command(const std::string& cmd, RedisResult& rst);
-	bool Command(RedisResult& rst, const char* cmd, ...);
+	// 命令样式 "set key 123"
+	// 见DoCommand解释
+	bool Command(const std::string& str);
+	bool Command(const std::string& str, RedisResult& rst);
+	bool Command(const char* format, ...);
+	bool Command(RedisResult& rst, const char* format, ...);
+	bool Command(const std::vector<std::string>& strs);
+	bool Command(const std::vector<std::string>& strs, std::vector<RedisResult>& rst);
 
-	// 订阅使用 执行任何命令都直接返回false或者-1
-	// 返回false表示解析失败或者网络读取失败 返回true表示开启订阅
-	// 若Redis发生了重连，订阅自动取消，外部可以Message函数返回值判断，然后重新订阅
-	bool SubScribe(const std::string& channel);
-	// 取消订阅
-	// channel 为空表示取消所有订阅
-	bool UnSubScribe(const std::string& channel);
-	// 获取订阅的消息 返回值-1:网络错误, -2表示未开启订阅，0表示没有消息, 1表示收到消息
-	// 参数block表示是否阻塞直到收到订阅消息
-	int Message(std::string& channel, std::string& msg, bool block);
-	
+	// 执行命令 等待返回结果
+	// 返回结果只表示协议解析或者网络读取的结果
+	// 命令错误在rst中，结果会返回true
+	bool DoCommand(const RedisCommand& cmd, RedisResult& rst);
+	bool DoCommand(const std::vector<RedisCommand>& cmds, std::vector<RedisResult>& rst);
+
 	// 连接信息
 	const std::string& Host() const { return m_host; }
 	unsigned short Port() const { return m_port; }
@@ -51,16 +49,42 @@ public:
 	int64_t NetIOCostTSC() const { return m_sendcosttsc + m_recvcosttsc; }
 	void ResetOps() { m_ops = m_sendbytes = m_recvbytes = m_sendcost = m_recvcost = m_sendcosttsc = m_recvcosttsc = 0; }
 
+	//////////////////////////////////////////////////////////////////////////
+	// 订阅相关，Redis发生了重连会自动重新订阅之前订阅的频道
+	// SUBSCRIBE 命令
+	// 返回false表示解析失败或者网络读取失败 返回true表示开启订阅
+	bool SubScribe(const std::string& channel);
+	// UNSUBSCRIBE 命令
+	// channel 为空表示取消所有订阅
+	bool UnSubScribe(const std::string& channel);
+	// PSUBSCRIBE 命令
+	// 返回false表示解析失败或者网络读取失败 返回true表示开启订阅
+	bool PSubScribe(const std::string& pattern);
+	// PUNSUBSCRIBE 命令
+	// channel 为空表示取消所有订阅
+	bool PUnSubScribe(const std::string& pattern);
+	// 获取订阅的消息 返回值-1:网络错误或者其他错误, 0表示没有消息, 1表示收到消息
+	// 参数block表示是否阻塞直到收到消息 但不一定是订阅消息 可能是注册或者取消订阅消息
+	int Message(std::string& channel, std::string& msg, bool block = false);
+	// PUBLISH命令
+	// 返回接收到信息的订阅者数量 -1表示网络或其他错误
+	int Publish(const std::string& channel, const std::string& msg);
+
 protected:
 	bool Connect();
 	bool CheckConnect();
 
-	// 返回false表示解析失败或者网络读取失败
-	bool DoCommand(const std::vector<std::string>& buff, RedisResult& rst);
-
-	// 发送命令
-	bool SendCommand(const std::string& cmdbuff);
-	bool SendCommandAndCheckConnect(const std::string& cmdbuff);
+	// 发送命令 单条命令 和 多条命令
+	template<class _Command_>
+	bool SendAndCheckConnect(const _Command_& cmd)
+	{
+		if (!CheckConnect()) return false;
+		if (Send(cmd)) return true;
+		if (!Connect()) return false; // 尝试连接下
+		return Send(cmd);
+	}
+	bool Send(const RedisCommand& cmd);
+	bool Send(const std::vector<RedisCommand>& cmd);
 
 	// buff表示数据地址 buff中包括\r\n minlen表示buff中不包括\r\n的最少长度
 	// 返回值表示buff长度 -1:网络读取失败 0:没有读取到
@@ -89,6 +113,7 @@ protected:
 		UnSubscribeSend = 3,	// 客户端取消订阅
 	};
 	std::map<std::string, SubscribeState> m_channel; // 订阅列表
+	std::map<std::string, SubscribeState> m_pattern; // 模式订阅列表
 
 	// 连接信息
 	std::string m_host;
@@ -136,16 +161,12 @@ public:
 	int TTL(const std::string& key, long long& value);
 	int PTTL(const std::string& key, long long& value);
 
+	//////////////////////////////////////////////////////////////////////////
 	// SET命令 
 	// 返回1成功 0不成功 -1表示网络或其他错误
 	// ex(秒) 和 px(毫秒) 只能使用一个，另一个必须有-1, 否则优先使用ex
-	int Set(const std::string& key, const std::string& value, unsigned int ex = -1, unsigned int px = -1, bool nx = false);
 	template<class Value>
-	int Set(const std::string& key, const Value& value, unsigned int ex = -1, unsigned int px = -1, bool nx = false)
-	{
-		return Set(key, Redis::to_string(value), ex, px, nx);
-	}
-
+	int Set(const std::string& key, const Value& value, unsigned int ex = -1, unsigned int px = -1, bool nx = false);
 	// GET命令
 	// 返回1成功 0不成功 -1表示网络或其他错误
 	int Get(const std::string& key, std::string& value);
@@ -462,24 +483,16 @@ public:
 	// 返回列表长度 0元素为空或者不成功 -1表示网络或其他错误
 	int LLen(const std::string& key);
 
+	//////////////////////////////////////////////////////////////////////////
 	// SADD命令
 	// 成功返回添加的数量 0不成功 -1表示网络或其他错误
-	int SAdd(const std::string& key, const std::string& value);
-	int SAdds(const std::string& key, const std::vector<std::string>& values);
 	template<class Value>
-	int SAdd(const std::string& key, const Value& value)
-	{
-		return SAdd(key, Redis::to_string(value));
-	}
+	int SAdd(const std::string& key, const Value& value);
 	template<class ValueList>
-	int SAdds(const std::string& key, const ValueList& values)
-	{
-		std::vector<std::string> values_;
-		values_.reserve(values.size());
-		for (auto it = values.begin(); it != values.end(); ++it)
-			values_.emplace_back(Redis::to_string(*it));
-		return SAdds(key, values_);
-	}
+	int SAdds(const std::string& key, const ValueList& values);
+	// SCARD命令
+	// 返回集合长度 0元素为空或者不成功 -1表示网络或其他错误
+	int SCard(const std::string& key);
 
 	// SREM命令
 	// 成功返回移除元素的数量 0不成功 -1表示网络或其他错误
@@ -538,23 +551,122 @@ public:
 		return SISMember(key, Redis::to_string(value));
 	}
 
-	// SCARD命令
-	// 返回集合长度 0元素为空或者不成功 -1表示网络或其他错误
-	int SCard(const std::string& key);
-
+	//////////////////////////////////////////////////////////////////////////
 	// EVAL命令
 	// 1成功 0不成功 -1表示网络或其他错误
 	int Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args);
 	int Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst);
-
 	// EVALSHA命令
 	// 1成功 0不成功 -1表示网络或其他错误
-	int Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args);
-	int Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst);
-
+	int Evalsha(const std::string& scriptsha1, const std::vector<std::string>& keys, const std::vector<std::string>& args);
+	int Evalsha(const std::string& scriptsha1, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst);
+	// SCRIPT EXISTS命令
+	// 返回1存在 0不存在 -1表示网络或者其他错误
+	int ScriptExists(const std::string& scriptsha1);
+	// SCRIPT FLUSH命令
+	// 返回1成功 0不成功 -1表示网络或其他错误
+	int ScriptFlush();
+	// SCRIPT KILL命令
+	// 返回1成功 0不成功 -1表示网络或其他错误
+	int ScriptKill();
 	// SCRIPT LOAD命令
 	// 1成功 0不成功 -1表示网络或其他错误
-	int ScriptLoad(const std::string& script, std::string& sha1);
+	int ScriptLoad(const std::string& script, std::string& scriptsha1);
 };
+
+template<class Value>
+int RedisSync::Set(const std::string& key, const Value& value, unsigned int ex, unsigned int px, bool nx)
+{
+	RedisCommand cmd;
+	cmd.Add("SET");
+	cmd.Add(key);
+	cmd.Add(Redis::to_string(value));
+	if (ex != -1)
+	{
+		cmd.Add("EX");
+		cmd.Add(ex);
+	}
+	else if (px != -1)
+	{
+		cmd.Add("PX");
+		cmd.Add(px);
+	}
+	if (nx)
+	{
+		cmd.Add("NX");
+	}
+
+	// 如果 key 已经存储其他值， SET 就覆写旧值，且无视类型
+	// 返回OK 或者nil
+	RedisResult rst;
+	if (!DoCommand(cmd, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return -1;
+	}
+	if (rst.IsNull())
+	{
+		// 未设置成功
+		return 0;
+	}
+	return 1;
+}
+
+template<class Value>
+int RedisSync::SAdd(const std::string& key, const Value& value)
+{
+	RedisCommand cmd;
+	cmd.Add("SADD");
+	cmd.Add(key);
+	cmd.Add(value);
+
+	RedisResult rst;
+	if (!DoCommand(cmd, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		return 0;
+	}
+	if (rst.IsInt())
+	{
+		return rst.ToInt();
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
+
+template<class ValueList>
+int RedisSync::SAdds(const std::string& key, const ValueList& values)
+{
+	RedisCommand cmd;
+	cmd.Add("SADD");
+	cmd.Add(key);
+	for (const auto& it : values)
+	{
+		cmd.Add(Redis::to_string(it));
+	}
+
+	RedisResult rst;
+	if (!DoCommand(cmd, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		return 0;
+	}
+	if (rst.IsInt())
+	{
+		return rst.ToInt();
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
 
 #endif

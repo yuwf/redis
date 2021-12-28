@@ -12,7 +12,11 @@
 #include <sstream>
 #include <boost/any.hpp>
 
-class RedisResult;
+#include "LLog.h"
+#define LogError LLOG_ERROR
+#define LogInfo LLOG_INFO
+
+struct RedisResult;
 class Redis
 {
 protected:
@@ -21,8 +25,11 @@ protected:
 
 	// 该函数通过调用下面的ReadToCRLF获取数据
 	// 注意：ReadToCRLF返回的数据要求ReadReply结束前一直有效
-	// 返回值 -1:网络错误 -2:解析错误 0:未读取到 1:读取到了
+	// 返回值 -1:网络错误 -2:协议解析错误 0:未读取到 1:读取到了
 	int ReadReply(RedisResult& rst);
+
+	// 解释同ReadReply
+	int _ReadReply(RedisResult& rst);
 
 	// buff表示数据地址 buff中包括\r\n minlen表示buff中不包括\r\n的最少长度
 	// 返回值表示buff长度 -1:网络读取失败 0:没有读取到
@@ -31,15 +38,9 @@ protected:
 	// 读取回滚 ReadReply函数通过ReadToCRLF读取的数据不是完整的数据，回滚本次读取
 	virtual bool ReadRollback(int len) = 0;
 
-	int m_readreplylen;
+	int m_readlen = 0;
 
 public:
-	// 解释同ReadReply
-	int _ReadReply(RedisResult& rst);
-
-	// 格式化命令
-	static void FormatCommand(const std::vector<std::string>& buff, std::stringstream &cmdbuff);
-
 	// 转化成string
 	static const std::string& to_string(const std::string& v)
 	{
@@ -130,13 +131,37 @@ private:
 	Redis& operator=(const Redis&) = delete;
 };
 
-// Redis结果值对象
-class RedisResult
+struct RedisCommand
 {
-public:
-	typedef std::vector<RedisResult> Array;
+	template<class Value>
+	void Add(const Value& v)
+	{
+		buff.emplace_back(Redis::to_string(v));
+	}
 
-	RedisResult();
+	// 参数为 "set key 123" 样式
+	void FromString(const std::string& cmd);
+
+	// 命令按照Redis协议格式写入到stream中
+	template<class Stream>
+	void ToStream(Stream &stream) const
+	{
+		static std::string rn = "\r\n";
+		stream << "*" << buff.size() << rn;
+		for (const auto& it : buff)
+		{
+			stream << "$" << it.size() << rn << it << rn;
+		}
+	}
+
+protected:
+	std::vector<std::string> buff;
+};
+
+// Redis结果值对象
+struct RedisResult
+{
+	typedef std::vector<RedisResult> Array;
 
 	bool IsError() const;
 
@@ -202,11 +227,8 @@ public:
 		return true;
 	}
 
-protected:
-	friend class Redis;
-	friend class RedisSyncPipeline;
 	boost::any v;
-	bool error;
+	bool error = false;
 };
 
 class RedisResultBind

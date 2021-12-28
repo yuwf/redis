@@ -4,26 +4,6 @@
 #include "RedisSync.h"
 #include "SpeedTest.h"
 
-#include "LLog.h"
-#define LogError LLOG_ERROR
-#define LogInfo LLOG_INFO
-
-struct _IOCostTest
-{
-	int64_t begin = TSC();
-
-	// CPU频率值
-	int64_t elapsed() const
-	{
-		return TSC() - begin;
-	}
-	//微秒
-	int64_t elapsed_micro() const
-	{
-		return (TSC() - begin) / TSCPerUS();
-	}
-};
-
 RedisSync::RedisSync(bool subscribe)
 	: m_socket(m_ioservice)
 	, m_subscribe(subscribe)
@@ -39,7 +19,7 @@ bool RedisSync::InitRedis(const std::string& host, unsigned short port, const st
 {
 	if(host.empty())
 	{
-		LogError("Redis ip is empty");
+		LogError("RedisSync ip is empty");
 		return false;
 	}
 
@@ -71,85 +51,161 @@ void RedisSync::Close()
 	ClearRecvBuff();
 }
 
-bool RedisSync::Command(const std::string& cmd)
+bool RedisSync::Command(const std::string& str)
 {
-	RedisResult rst;
-	return Command(cmd, rst);
-}
-
-bool RedisSync::Command(const std::string& cmd, RedisResult& rst)
-{
-	if (cmd.empty())
+	if (str.empty())
 	{
 		return false;
-	}
-	std::string temp = cmd;
-	int protect = 0;	// 1 单引号保护  2 双引号保护
-	int size = (int)temp.size();
-	for (int i = 0; i < size; ++i)
-	{
-		if (protect==1)
-		{
-			if (temp[i] == '\'')
-			{
-				temp[i] = '\0';
-				protect = 0;
-			}
-			continue;
-		}
-		if (protect == 2)
-		{
-			if (temp[i] == '\"')
-			{
-				temp[i] = '\0';
-				protect = 0;
-			}
-			continue;
-		}
-		if (temp[i] == ' ' || temp[i] == '\t')
-		{
-			temp[i] = '\0';
-		}
-		if (temp[i] == '\'')
-		{
-			protect = 1; // 进入单引号
-			temp[i] = '\0';
-		}
-		if (temp[i] == '\"')
-		{
-			protect = 2; // 进入双引号
-			temp[i] = '\0';
-		}
-	}
-
-	std::vector<std::string> buff;
-	for (int i = 0; i < size;)
-	{
-		if (temp[i] == '\0')
-		{
-			++i;
-			continue;
-		}
-		buff.push_back(&temp[i]);
-		i += (int)buff.back().size();
 	}
 	
-	if (!DoCommand(buff, rst))
+	RedisCommand cmd;
+	cmd.FromString(str);
+
+	RedisResult rst;
+	return DoCommand(cmd, rst);
+}
+
+bool RedisSync::Command(const std::string& str, RedisResult& rst)
+{
+	if (str.empty())
 	{
 		return false;
+	}
+
+	RedisCommand cmd;
+	cmd.FromString(str);
+
+	return DoCommand(cmd, rst);
+}
+
+bool RedisSync::Command(const char* format, ...)
+{
+	char str[1024] = { 0 };
+	va_list ap;
+	va_start(ap, format);
+	vsnprintf(str, 1024 - 1, format, ap);
+	va_end(ap);
+
+	RedisCommand cmd;
+	cmd.FromString(str);
+
+	RedisResult rst;
+	return DoCommand(cmd, rst);
+}
+
+bool RedisSync::Command(RedisResult& rst, const char* format, ...)
+{
+	char str[1024] = { 0 };
+	va_list ap;
+	va_start(ap, format);
+	vsnprintf(str, 1024 - 1, format, ap);
+	va_end(ap);
+
+	RedisCommand cmd;
+	cmd.FromString(str);
+
+	return DoCommand(cmd, rst);
+}
+
+bool RedisSync::Command(const std::vector<std::string>& strs)
+{
+	if (strs.empty())
+	{
+		return false;
+	}
+
+	std::vector<RedisCommand> cmds;
+	for (const auto& it : strs)
+	{
+		cmds.push_back(RedisCommand());
+		cmds.back().FromString(it);
+	}
+
+	RedisResult::Array rst;
+	return DoCommand(cmds, rst);
+}
+
+bool RedisSync::Command(const std::vector<std::string>& strs, std::vector<RedisResult>& rst)
+{
+	if (strs.empty())
+	{
+		return false;
+	}
+
+	std::vector<RedisCommand> cmds;
+	for (const auto& it : strs)
+	{
+		cmds.push_back(RedisCommand());
+		cmds.back().FromString(it);
+	}
+
+	return DoCommand(cmds, rst);
+}
+
+bool RedisSync::DoCommand(const RedisCommand& cmd, RedisResult& rst)
+{
+	if (m_subscribe)
+	{
+		LogError("RedisSync is SubScribe Object");
+		return false;
+	}
+
+	if (!SendAndCheckConnect(cmd))
+	{
+		return false;
+	}
+
+	ClearRecvBuff();
+
+	if (ReadReply(rst) != 1)
+	{
+		Close();
+		return false;
+	}
+	if (rst.IsError())
+	{
+		LogError("Redis %s", rst.ToString().c_str());
 	}
 	return true;
 }
 
-bool RedisSync::Command(RedisResult& rst, const char* cmd, ...)
+bool RedisSync::DoCommand(const std::vector<RedisCommand>& cmds, std::vector<RedisResult>& rst)
 {
-	char buff[1024] = { 0 };
-	va_list ap;
-	va_start(ap, cmd);
-	vsnprintf(buff, 1024 - 1, cmd, ap);
-	va_end(ap);
+	if (m_subscribe)
+	{
+		LogError("RedisSync is SubScribe Object");
+		return false;
+	}
 
-	return Command(buff, rst);
+	int cmdcount = (int)cmds.size();
+	if (cmdcount == 0)
+	{
+		return true;
+	}
+
+	if (!SendAndCheckConnect(cmds))
+	{
+		return false;
+	}
+
+	for (int i = 0; i < cmdcount; ++i)
+	{
+		rst.push_back(RedisResult());
+		RedisResult& rst2 = rst.back();
+		if (ReadReply(rst2) != 1)
+		{
+			Close();
+			return false;
+		}
+		if (rst2.IsError())
+		{
+			LogError("Redis %s", rst2.ToString().c_str());
+		}
+		else
+		{
+		}
+	}
+	return true;
 }
 
 bool RedisSync::SubScribe(const std::string& channel)
@@ -160,21 +216,16 @@ bool RedisSync::SubScribe(const std::string& channel)
 		return false;
 	}
 
-	std::vector<std::string> buff;
-	buff.push_back("SUBSCRIBE");
-	buff.push_back(channel);
+	RedisCommand cmd;
+	cmd.Add("SUBSCRIBE");
+	cmd.Add(channel);
 
-	// 命令写入buff
-	std::stringstream cmdbuff;
-	FormatCommand(buff, cmdbuff);
-
-	if (!SendCommandAndCheckConnect(cmdbuff.str()))
+	if (!SendAndCheckConnect(cmd))
 	{
 		return false;
 	}
 
 	m_channel[channel] = SubscribeSend;
-
 	return true;
 }
 
@@ -186,22 +237,14 @@ bool RedisSync::UnSubScribe(const std::string& channel)
 		return false;
 	}
 
-	boost::system::error_code ec;
-	bool non_block(false);
-	m_socket.non_blocking(non_block, ec);
-
-	std::vector<std::string> buff;
-	buff.push_back("UNSUBSCRIBE");
+	RedisCommand cmd;
+	cmd.Add("UNSUBSCRIBE");
 	if (!channel.empty())
 	{
-		buff.push_back(channel);
+		cmd.Add(channel);
 	}
 
-	// 命令写入buff
-	std::stringstream cmdbuff;
-	FormatCommand(buff, cmdbuff);
-
-	if (!SendCommandAndCheckConnect(cmdbuff.str()))
+	if (!SendAndCheckConnect(cmd))
 	{
 		return false;
 	}
@@ -221,7 +264,65 @@ bool RedisSync::UnSubScribe(const std::string& channel)
 			it.second = UnSubscribeSend;
 		}
 	}
+	return true;
+}
 
+bool RedisSync::PSubScribe(const std::string& pattern)
+{
+	if (!m_subscribe)
+	{
+		LogError("RedisSync not SubScribe Object");
+		return false;
+	}
+
+	RedisCommand cmd;
+	cmd.Add("PSUBSCRIBE");
+	cmd.Add(pattern);
+
+	if (!SendAndCheckConnect(cmd))
+	{
+		return false;
+	}
+
+	m_pattern[pattern] = SubscribeSend;
+	return true;
+}
+
+bool RedisSync::PUnSubScribe(const std::string& pattern)
+{
+	if (!m_subscribe)
+	{
+		LogError("RedisSync not SubScribe Object");
+		return false;
+	}
+
+	RedisCommand cmd;
+	cmd.Add("PUNSUBSCRIBE");
+	if (!pattern.empty())
+	{
+		cmd.Add(pattern);
+	}
+
+	if (!SendAndCheckConnect(cmd))
+	{
+		return false;
+	}
+
+	if (!pattern.empty())
+	{
+		auto it = m_pattern.find(pattern);
+		if (it != m_pattern.end())
+		{
+			it->second = UnSubscribeSend;
+		}
+	}
+	else
+	{
+		for (auto& it : m_pattern)
+		{
+			it.second = UnSubscribeSend;
+		}
+	}
 	return true;
 }
 
@@ -230,15 +331,23 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 	if (!m_subscribe)
 	{
 		LogError("RedisSync not SubScribe Object");
-		return -2;
+		return -1;
+	}
+	if (CheckConnect())
+	{
+		return -1;
 	}
 
-	boost::system::error_code ec;
-	bool non_block(!block);
-	m_socket.non_blocking(non_block, ec);
+	if (block)
+	{
+		boost::system::error_code ec;
+		bool non_block(false);
+		m_socket.non_blocking(non_block, ec);
+	}
 
 	RedisResult rst;
-	do 
+	int ret = -1;
+	do
 	{
 		int r = ReadReply(rst);
 		if (r < 0)
@@ -250,19 +359,24 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 			}
 			else
 			{
-				return -1;	// 未连接成功直接退出
+				return -1; // 未连接成功直接退出
 			}
 		}
 		else if (r == 0)
 		{
-			return 0;	// 未读取到数据
+			if (block) // 设置成了阻塞 一定要读取到数据
+			{
+				continue;
+			}
+			ret = 0;
+			break;
 		}
 
 		// 判断数据类型
 		if (!rst.IsArray())
 		{
 			LogError("UnKnown Error");
-			return -1;
+			break;
 		}
 		auto rstarray = rst.ToArray();
 		if (rstarray[0].ToString() == "message")
@@ -274,6 +388,7 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 			}
 			channel = rstarray[1].ToString();
 			msg = rstarray[2].ToString();
+			ret = 1;
 			break;
 		}
 		else if (rstarray[0].ToString() == "subscribe")
@@ -281,21 +396,21 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 			if (!rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsInt())
 			{
 				LogError("UnKnown Error");
-				return false;
+				break;
 			}
-			channel = rstarray[1].ToString();
+			std::string channel = rstarray[1].ToString();
 			int rst = rstarray[2].ToInt();
 
 			auto it = m_channel.find(channel);
 			if (it != m_channel.end())
 			{
 				it->second = SubscribeRecv;
+				LogInfo("subscribe channel=%s", channel.c_str());
 			}
 			else
 			{
 				LogError("not find local subscribe channel, %s", channel.c_str());
 			}
-			channel = "";
 		}
 		else if (rstarray[0].ToString() == "unsubscribe")
 		{
@@ -306,37 +421,111 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 			if (!rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsInt())
 			{
 				LogError("UnKnown Error");
-				return false;
+				break;
 			}
-			channel = rstarray[1].ToString();
+			std::string channel = rstarray[1].ToString();
 			int rst = rstarray[2].ToInt();
 
 			auto it = m_channel.find(channel);
 			if (it != m_channel.end())
 			{
+				LogInfo("unsubscribe channel=%s", channel.c_str());
 				m_channel.erase(it);
 			}
 			else
 			{
 				LogError("not find local subscribe channel, %s", channel.c_str());
 			}
-			channel = "";
+		}
+		else if (rstarray[0].ToString() == "psubscribe")
+		{
+			if (!rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsInt())
+			{
+				LogError("UnKnown Error");
+				break;
+			}
+			std::string pattern = rstarray[1].ToString();
+			int rst = rstarray[2].ToInt();
+
+			auto it = m_pattern.find(pattern);
+			if (it != m_pattern.end())
+			{
+				it->second = SubscribeRecv;
+				LogInfo("psubscribe pattern=%s", pattern.c_str());
+			}
+			else
+			{
+				LogError("not find local subscribe pattern, %s", pattern.c_str());
+			}
+		}
+		else if (rstarray[0].ToString() == "punsubscribe")
+		{
+			if (rstarray[1].IsNull()) // 若没有订阅 发全部取消，此值会返回空
+			{
+				continue;
+			}
+			if (!rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsInt())
+			{
+				LogError("UnKnown Error");
+				break;
+			}
+			std::string pattern = rstarray[1].ToString();
+			int rst = rstarray[2].ToInt();
+
+			auto it = m_pattern.find(pattern);
+			if (it != m_pattern.end())
+			{
+				LogInfo("punsubscribe pattern=%s", pattern.c_str());
+				m_pattern.erase(it);
+			}
+			else
+			{
+				LogError("not find local subscribe pattern, %s", pattern.c_str());
+			}
 		}
 		else
 		{
 			LogError("UnKnown Error %s", rstarray[0].ToString().c_str());
-			return -1;
+			break;
 		}
 
 	} while (true);
-	
+
+	// 回复socket状态
+	if (block)
+	{
+		boost::system::error_code ec;
+		bool non_block(true);
+		m_socket.non_blocking(non_block, ec);
+	}
+
 	// 收缩下接受数据的buff
 	if (m_recvbuff.size() > 1024)
 	{
 		ResetRecvBuff();
 	}
 
-	return 1;
+	return ret;
+}
+
+int RedisSync::Publish(const std::string& channel, const std::string& msg)
+{
+	RedisCommand cmd;
+	cmd.Add("PUBLISH");
+	cmd.Add(channel);
+	cmd.Add(msg);
+
+	RedisResult rst;
+	if (!DoCommand(cmd, rst))
+	{
+		return -1;
+	}
+	if (rst.IsInt())
+	{
+		return rst.ToInt();
+	}
+	LogError("UnKnown Error");
+	return -1;
 }
 
 bool RedisSync::Connect()
@@ -357,12 +546,7 @@ bool RedisSync::Connect()
 			endpoint_iterator++;
 			continue;
 		}
-		
-#if defined(_WIN32)
-		DWORD conntimeout = 8000;
-		DWORD sendtimeout = 4000;
-		DWORD recvtimeout = 4000;
-#else
+
 		struct timeval conntimeout;
 		conntimeout.tv_sec = 8;
 		conntimeout.tv_usec = 0;
@@ -372,18 +556,17 @@ bool RedisSync::Connect()
 		struct timeval recvtimeout;
 		recvtimeout.tv_sec = 4;
 		recvtimeout.tv_usec = 0;
-#endif
+
 		int nRet = 0;
 		// 设置超时 连接超时好像一直失败 在linux下没有SO_CONNECT_TIME
 		//nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_CONNECT_TIME, (const char*)&conntimeout, sizeof(conntimeout));
 		nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_SNDTIMEO, (const char*)&sendtimeout, sizeof(sendtimeout));
-		if (!m_subscribe)
-		{
-			nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_RCVTIMEO, (const char*)&recvtimeout, sizeof(recvtimeout)); // 订阅接受不设置超时
-		}
+		nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_RCVTIMEO, (const char*)&recvtimeout, sizeof(recvtimeout));
 
 		m_socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
 		m_socket.set_option(boost::asio::socket_base::keep_alive(true), ec);
+
+		// 默认阻塞
 		bool non_block(false);
 		m_socket.non_blocking(non_block, ec);
 
@@ -404,51 +587,47 @@ bool RedisSync::Connect()
 	}
 
 	// 密码或者测试连接
-	std::vector<std::string> buff;
-	if (!m_auth.empty())
 	{
-		buff.push_back("AUTH");
-		buff.push_back(m_auth);
-	}
-	else
-	{
-		buff.push_back("PING");
-	}
+		RedisCommand cmd;
+		if (!m_auth.empty())
+		{
+			cmd.Add("AUTH");
+			cmd.Add(m_auth);
+		}
+		else
+		{
+			cmd.Add("PING");
+		}
 
-	std::stringstream cmdbuff;
-	FormatCommand(buff, cmdbuff);
-	
-	if (!SendCommand(cmdbuff.str()))
-	{
-		m_socket.close(ec);
-		return false;
-	}
+		if (!Send(cmd))
+		{
+			m_socket.close(ec);
+			return false;
+		}
 
-	RedisResult rst;
-	if (ReadReply(rst) != 1)
-	{
-		LogError("RedisSync Maybe Not Valid Redis Address, host=%s port=%d", m_host.c_str(), (int)m_port);
-		m_socket.close(ec);
-		return false;
-	}
-	if (rst.IsNull() || rst.IsError())
-	{
-		LogError("RedisSync Auth Error, %s", m_auth.c_str());
-		m_socket.close(ec);
-		return false;
+		RedisResult rst;
+		if (ReadReply(rst) != 1)
+		{
+			LogError("RedisSync Maybe Not Valid Redis Address, host=%s port=%d", m_host.c_str(), (int)m_port);
+			m_socket.close(ec);
+			return false;
+		}
+		if (rst.IsNull() || rst.IsError())
+		{
+			LogError("RedisSync Auth Error, %s", m_auth.c_str());
+			m_socket.close(ec);
+			return false;
+		}
 	}
 
 	// 选择数据库
 	if (m_index != 0)
 	{
-		std::vector<std::string> buff;
-		buff.push_back("SELECT");
-		buff.push_back(std::to_string(m_index));
+		RedisCommand cmd;
+		cmd.Add("SELECT");
+		cmd.Add(m_index);
 
-		std::stringstream cmdbuff;
-		FormatCommand(buff, cmdbuff);
-
-		if (!SendCommand(cmdbuff.str()))
+		if (!Send(cmd))
 		{
 			m_socket.close(ec);
 			return false;
@@ -477,6 +656,10 @@ bool RedisSync::Connect()
 	// 重新订阅
 	if (m_subscribe)
 	{
+		// 订阅默认不阻塞
+		bool non_block(true);
+		m_socket.non_blocking(non_block, ec);
+
 		for (auto it = m_channel.begin(); it != m_channel.end(); )
 		{
 			if (it->second == SubscribeSend || it->second == SubscribeRecv)
@@ -487,6 +670,18 @@ bool RedisSync::Connect()
 			else
 			{
 				m_channel.erase(it++);
+			}
+		}
+		for (auto it = m_pattern.begin(); it != m_pattern.end(); )
+		{
+			if (it->second == SubscribeSend || it->second == SubscribeRecv)
+			{
+				PSubScribe(it->first);
+				++it;
+			}
+			else
+			{
+				m_pattern.erase(it++);
 			}
 		}
 	}
@@ -509,53 +704,27 @@ bool RedisSync::CheckConnect()
 		}
 		else
 		{
-			LogError("Redis Not Connect");
+			LogError("RedisSync Not Connect");
 			return false;
 		}
 	}
 	return true;
 }
 
-bool RedisSync::DoCommand(const std::vector<std::string>& buff, RedisResult& rst)
+bool RedisSync::Send(const RedisCommand& cmd)
 {
-	if (m_subscribe)
-	{
-		LogError("RedisSync is SubScribe Object");
-		return false;
-	}
-
 	m_ops++;
-	
-	std::stringstream cmdbuff;
-	FormatCommand(buff, cmdbuff);
+	boost::asio::streambuf sendbuff;
+	std::ostream ss(&sendbuff);
+	cmd.ToStream(ss);
 
-	if (!SendCommandAndCheckConnect(cmdbuff.str()))
-	{
-		return false;
-	}
-
-	ClearRecvBuff();
-
-	if (ReadReply(rst) != 1)
-	{
-		Close();
-		return false;
-	}
-	if (rst.IsError())
-	{
-		LogError("Redis %s", rst.ToString().c_str());
-	}
-	return true;
-}
-
-bool RedisSync::SendCommand(const std::string& cmdbuff)
-{
-	_IOCostTest _iotest;
+	int64_t begin = TSC();
 	boost::system::error_code ec;
-	boost::asio::write(m_socket, boost::asio::buffer(cmdbuff), boost::asio::transfer_all(), ec);
-	m_sendbytes += cmdbuff.size();
-	m_sendcost += _iotest.elapsed_micro();
-	m_sendcosttsc += _iotest.elapsed();
+	std::size_t size = boost::asio::write(m_socket, sendbuff.data(), boost::asio::transfer_all(), ec);
+	m_sendbytes += sendbuff.size();
+	int64_t end = TSC();
+	m_sendcost += (end - begin) / TSCPerUS();
+	m_sendcosttsc += (end - begin);
 	if (ec)
 	{
 		LogError("RedisSync Write Error, %s", ec.message().c_str());
@@ -564,23 +733,27 @@ bool RedisSync::SendCommand(const std::string& cmdbuff)
 	return true;
 }
 
-bool RedisSync::SendCommandAndCheckConnect(const std::string& cmdbuff)
+bool RedisSync::Send(const std::vector<RedisCommand>& cmds)
 {
-	if (!CheckConnect())
+	m_ops += cmds.size();
+	boost::asio::streambuf sendbuff;
+	std::ostream ss(&sendbuff);
+	for (const auto& it : cmds)
 	{
-		return false;
+		it.ToStream(ss);
 	}
-	if (!SendCommand(cmdbuff))
+
+	int64_t begin = TSC();
+	boost::system::error_code ec;
+	boost::asio::write(m_socket, sendbuff.data(), boost::asio::transfer_all(), ec);
+	m_sendbytes += sendbuff.size();
+	int64_t end = TSC();
+	m_sendcost += (end - begin) / TSCPerUS();
+	m_sendcosttsc += (end - begin);
+	if (ec)
 	{
-		// 尝试连接下
-		if (!Connect())
-		{
-			return false;
-		}
-		if (!SendCommand(cmdbuff))
-		{
-			return false;
-		}
+		LogError("RedisSync Write Error, %s", ec.message().c_str());
+		return false;
 	}
 	return true;
 }
@@ -605,17 +778,25 @@ int RedisSync::ReadToCRLF(char** buff, int mindatalen)
 		}
 
 		boost::array<char, 512> inbuff;
-		_IOCostTest _iotest;
+		int64_t begin = TSC();
 		boost::system::error_code ec;
 		size_t size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
-		m_recvcost += _iotest.elapsed_micro();
-		m_recvcosttsc += _iotest.elapsed();
+		int64_t end = TSC();
+		m_recvcost += ((end - begin) / TSCPerUS());
+		m_recvcosttsc += (end - begin);
 		if (ec)
 		{
 			if (ec == boost::asio::error::would_block)
 			{
 				// 非阻塞socket
 				return 0;
+			}
+			else if (ec == boost::asio::error::timed_out)
+			{
+				if (m_subscribe) // 订阅的读取超时了，定义为未读取到
+				{
+					return 0;
+				}
 			}
 			LogError("RedisSync Read Error, %s", ec.message().c_str());
 			return -1;
@@ -661,187 +842,155 @@ void RedisSync::ResetRecvBuff()
 
 int RedisSync::Del(const std::string& key)
 {
-	std::vector<std::string> buff;
-	buff.push_back("DEL");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("DEL");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
 	}
 	if (rst.IsInt())
 	{
 		return rst.ToInt();
 	}
 	LogError("UnKnown Error");
-	return 0;
+	return -1;
 }
 
 int RedisSync::Del(const std::vector<std::string>& key)
 {
-	std::vector<std::string> buff;
-	buff.push_back("DEL");
+	RedisCommand cmd;
+	cmd.Add("DEL");
 
 	for (auto it = key.begin(); it != key.end(); ++it)
 	{
-		buff.push_back(*it);
+		cmd.Add(*it);
 	}
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
 	}
 	if (rst.IsInt())
 	{
 		return rst.ToInt();
 	}
 	LogError("UnKnown Error");
-	return 0;
+	return -1;
 }
 
 int RedisSync::Exists(const std::string& key)
 {
-	std::vector<std::string> buff;
-	buff.push_back("EXISTS");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("EXISTS");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
 	}
 	if (rst.IsInt())
 	{
 		return rst.ToInt();
 	}
 	LogError("UnKnown Error");
-	return 0;
+	return -1;
 }
 
 int RedisSync::Expire(const std::string& key, long long value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("EXPIRE");
-	buff.push_back(key);
-	buff.push_back(std::to_string(value));
+	RedisCommand cmd;
+	cmd.Add("EXPIRE");
+	cmd.Add(key);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
 	}
 	if (rst.IsInt())
 	{
 		return rst.ToInt();
 	}
 	LogError("UnKnown Error");
-	return 0;
+	return -1;
 }
 
 int RedisSync::ExpireAt(const std::string& key, long long value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("EXPIREAT");
-	buff.push_back(key);
-	buff.push_back(std::to_string(value));
+	RedisCommand cmd;
+	cmd.Add("EXPIREAT");
+	cmd.Add(key);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
 	}
 	if (rst.IsInt())
 	{
 		return rst.ToInt();
 	}
 	LogError("UnKnown Error");
-	return 0;
+	return -1;
 }
 
 int RedisSync::PExpire(const std::string& key, long long value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("PEXPIRE");
-	buff.push_back(key);
-	buff.push_back(std::to_string(value));
+	RedisCommand cmd;
+	cmd.Add("PEXPIRE");
+	cmd.Add(key);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
 	}
 	if (rst.IsInt())
 	{
 		return rst.ToInt();
 	}
 	LogError("UnKnown Error");
-	return 0;
+	return -1;
 }
 
 int RedisSync::PExpireAt(const std::string& key, long long value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("PEXPIREAT");
-	buff.push_back(key);
-	buff.push_back(std::to_string(value));
+	RedisCommand cmd;
+	cmd.Add("PEXPIREAT");
+	cmd.Add(key);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
 	}
 	if (rst.IsInt())
 	{
 		return rst.ToInt();
 	}
 	LogError("UnKnown Error");
-	return 0;
+	return -1;
 }
 
 int RedisSync::TTL(const std::string& key, long long& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("TTL");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("TTL");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
 	}
 	if (rst.IsInt())
 	{
@@ -849,23 +998,19 @@ int RedisSync::TTL(const std::string& key, long long& value)
 		return 1;
 	}
 	LogError("UnKnown Error");
-	return 0;
+	return -1;
 }
 
 int RedisSync::PTTL(const std::string& key, long long& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("PTTL");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("PTTL");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
 	}
 	if (rst.IsInt())
 	{
@@ -873,56 +1018,17 @@ int RedisSync::PTTL(const std::string& key, long long& value)
 		return 1;
 	}
 	LogError("UnKnown Error");
-	return 0;
-}
-
-int RedisSync::Set(const std::string& key, const std::string& value, unsigned int ex, unsigned int px, bool nx)
-{
-	std::vector<std::string> buff;
-	buff.push_back("SET");
-	buff.push_back(key);
-	buff.push_back(value);
-	if (ex != -1)
-	{
-		buff.push_back("EX");
-		buff.push_back(std::to_string(ex));
-	}
-	else if (px != -1)
-	{
-		buff.push_back("PX");
-		buff.push_back(std::to_string(px));
-	}
-	if (nx)
-	{
-		buff.push_back("NX");
-	}
-
-	RedisResult rst;
-	if (!DoCommand(buff, rst))
-	{
-		return -1;
-	}
-	if (rst.IsError())
-	{
-		// 命令错误
-		return 0;
-	}
-	if (rst.IsNull())
-	{
-		// 未设置成功
-		return 0;
-	}
-	return 1;
+	return -1;
 }
 
 int RedisSync::Get(const std::string& key, std::string& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("GET");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("GET");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -947,16 +1053,16 @@ int RedisSync::Get(const std::string& key, std::string& value)
 
 int RedisSync::MSet(const std::map<std::string, std::string>& kvs)
 {
-	std::vector<std::string> buff;
-	buff.push_back("MSET");
+	RedisCommand cmd;
+	cmd.Add("MSET");
 	for (auto it = kvs.begin(); it != kvs.end(); ++it)
 	{
-		buff.push_back(it->first);
-		buff.push_back(it->second);
+		cmd.Add(it->first);
+		cmd.Add(it->second);
 	}
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -980,15 +1086,15 @@ int RedisSync::MGet(const std::vector<std::string>& keys, RedisResult& rst)
 		return 0;
 	}
 
-	std::vector<std::string> buff;
-	buff.push_back("MGET");
+	RedisCommand cmd;
+	cmd.Add("MGET");
 
 	for (auto it = keys.begin(); it != keys.end(); ++it)
 	{
-		buff.push_back(*it);
+		cmd.Add(*it);
 	}
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1012,12 +1118,12 @@ int RedisSync::MGet(const std::vector<std::string>& keys, RedisResult& rst)
 
 int RedisSync::Incr(const std::string& key, long long& svalue)
 {
-	std::vector<std::string> buff;
-	buff.push_back("INCR");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("INCR");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1054,13 +1160,13 @@ int RedisSync::Incr(const std::string& key)
 
 int RedisSync::Incrby(const std::string& key, long long value, long long& svalue)
 {
-	std::vector<std::string> buff;
-	buff.push_back("INCRBY");
-	buff.push_back(key);
-	buff.push_back(std::to_string(value));
+	RedisCommand cmd;
+	cmd.Add("INCRBY");
+	cmd.Add(key);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1086,14 +1192,14 @@ int RedisSync::Incrby(const std::string& key, long long value)
 
 int RedisSync::HSet(const std::string& key, const std::string& field, const std::string& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HSET");
-	buff.push_back(key);
-	buff.push_back(field);
-	buff.push_back(value);
+	RedisCommand cmd;
+	cmd.Add("HSET");
+	cmd.Add(key);
+	cmd.Add(field);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1112,13 +1218,13 @@ int RedisSync::HSet(const std::string& key, const std::string& field, const std:
 
 int RedisSync::HGet(const std::string& key, const std::string& field, std::string& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HGET");
-	buff.push_back(key);
-	buff.push_back(field);
+	RedisCommand cmd;
+	cmd.Add("HGET");
+	cmd.Add(key);
+	cmd.Add(field);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1143,17 +1249,17 @@ int RedisSync::HGet(const std::string& key, const std::string& field, std::strin
 
 int RedisSync::HMSet(const std::string& key, const std::map<std::string, std::string>& kvs)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HMSET");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("HMSET");
+	cmd.Add(key);
 	for (auto it = kvs.begin(); it != kvs.end(); ++it)
 	{
-		buff.push_back(it->first);
-		buff.push_back(it->second);
+		cmd.Add(it->first);
+		cmd.Add(it->second);
 	}
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1172,16 +1278,16 @@ int RedisSync::HMSet(const std::string& key, const std::map<std::string, std::st
 
 int RedisSync::HMGet(const std::string& key, const std::vector<std::string>& fields, RedisResult& rst)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HMGET");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("HMGET");
+	cmd.Add(key);
 
 	for (auto it = fields.begin(); it != fields.end(); ++it)
 	{
-		buff.push_back(*it);
+		cmd.Add(*it);
 	}
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1205,11 +1311,11 @@ int RedisSync::HMGet(const std::string& key, const std::vector<std::string>& fie
 
 int RedisSync::HKeys(const std::string& key, RedisResult& rst)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HKEYS");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("HKEYS");
+	cmd.Add(key);
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1233,11 +1339,11 @@ int RedisSync::HKeys(const std::string& key, RedisResult& rst)
 
 int RedisSync::HVals(const std::string& key, RedisResult& rst)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HVALS");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("HVALS");
+	cmd.Add(key);
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1261,11 +1367,11 @@ int RedisSync::HVals(const std::string& key, RedisResult& rst)
 
 int RedisSync::HGetAll(const std::string& key, RedisResult& rst)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HGETALL");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("HGETALL");
+	cmd.Add(key);
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1289,14 +1395,14 @@ int RedisSync::HGetAll(const std::string& key, RedisResult& rst)
 
 int RedisSync::HIncrby(const std::string& key, const std::string& field, long long value, long long& svalue)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HINCRBY");
-	buff.push_back(key);
-	buff.push_back(field);
-	buff.push_back(std::to_string(value));
+	RedisCommand cmd;
+	cmd.Add("HINCRBY");
+	cmd.Add(key);
+	cmd.Add(field);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1322,12 +1428,12 @@ int RedisSync::HIncrby(const std::string& key, const std::string& field, long lo
 
 int RedisSync::HLen(const std::string& key)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HLEN");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("HLEN");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1345,22 +1451,22 @@ int RedisSync::HLen(const std::string& key)
 
 int RedisSync::HScan(const std::string& key, int cursor, const std::string& match, int count, int& rstcursor, RedisResult& rst)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HSCAN");
-	buff.push_back(key);
-	buff.push_back(std::to_string(cursor));
+	RedisCommand cmd;
+	cmd.Add("HSCAN");
+	cmd.Add(key);
+	cmd.Add(cursor);
 	if (!match.empty())
 	{
-		buff.push_back("MATCH");
-		buff.push_back(match);
+		cmd.Add("MATCH");
+		cmd.Add(match);
 	}
 	if (count > 0)
 	{
-		buff.push_back("COUNT");
-		buff.push_back(std::to_string(count));
+		cmd.Add("COUNT");
+		cmd.Add(count);
 	}
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1388,13 +1494,13 @@ int RedisSync::HScan(const std::string& key, int cursor, const std::string& matc
 
 int RedisSync::HExists(const std::string& key, const std::string& field)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HEXISTS");
-	buff.push_back(key);
-	buff.push_back(field);
+	RedisCommand cmd;
+	cmd.Add("HEXISTS");
+	cmd.Add(key);
+	cmd.Add(field);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1412,13 +1518,13 @@ int RedisSync::HExists(const std::string& key, const std::string& field)
 
 int RedisSync::HDel(const std::string& key, const std::string& field)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HDEL");
-	buff.push_back(key);
-	buff.push_back(field);
+	RedisCommand cmd;
+	cmd.Add("HDEL");
+	cmd.Add(key);
+	cmd.Add(field);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1436,17 +1542,17 @@ int RedisSync::HDel(const std::string& key, const std::string& field)
 
 int RedisSync::HDels(const std::string& key, const std::vector<std::string>& fields)
 {
-	std::vector<std::string> buff;
-	buff.push_back("HDEL");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("HDEL");
+	cmd.Add(key);
 
 	for (auto it = fields.begin(); it != fields.end(); ++it)
 	{
-		buff.push_back(*it);
+		cmd.Add(*it);
 	}
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1464,13 +1570,13 @@ int RedisSync::HDels(const std::string& key, const std::vector<std::string>& fie
 
 int RedisSync::LPush(const std::string& key, const std::string& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("LPUSH");
-	buff.push_back(key);
-	buff.push_back(value);
+	RedisCommand cmd;
+	cmd.Add("LPUSH");
+	cmd.Add(key);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1488,17 +1594,17 @@ int RedisSync::LPush(const std::string& key, const std::string& value)
 
 int RedisSync::LPushs(const std::string& key, const std::vector<std::string>& values)
 {
-	std::vector<std::string> buff;
-	buff.push_back("LPUSH");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("LPUSH");
+	cmd.Add(key);
 
 	for (auto it = values.begin(); it != values.end(); ++it)
 	{
-		buff.push_back(*it);
+		cmd.Add(*it);
 	}
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1516,13 +1622,13 @@ int RedisSync::LPushs(const std::string& key, const std::vector<std::string>& va
 
 int RedisSync::RPush(const std::string& key, const std::string& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("RPUSH");
-	buff.push_back(key);
-	buff.push_back(value);
+	RedisCommand cmd;
+	cmd.Add("RPUSH");
+	cmd.Add(key);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1540,17 +1646,17 @@ int RedisSync::RPush(const std::string& key, const std::string& value)
 
 int RedisSync::RPushs(const std::string& key, const std::vector<std::string>& values)
 {
-	std::vector<std::string> buff;
-	buff.push_back("RPUSH");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("RPUSH");
+	cmd.Add(key);
 
 	for (auto it = values.begin(); it != values.end(); ++it)
 	{
-		buff.push_back(*it);
+		cmd.Add(*it);
 	}
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1574,12 +1680,12 @@ int RedisSync::LPop(const std::string& key)
 
 int RedisSync::LPop(const std::string& key, std::string& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("LPOP");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("LPOP");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1608,12 +1714,12 @@ int RedisSync::RPop(const std::string& key)
 
 int RedisSync::RPop(const std::string& key, std::string& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("RPOP");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("RPOP");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1636,13 +1742,13 @@ int RedisSync::RPop(const std::string& key, std::string& value)
 
 int RedisSync::LRange(const std::string& key, int start, int stop, RedisResult& rst)
 {
-	std::vector<std::string> buff;
-	buff.push_back("LRANGE");
-	buff.push_back(key);
-	buff.push_back(std::to_string(start));
-	buff.push_back(std::to_string(stop));
+	RedisCommand cmd;
+	cmd.Add("LRANGE");
+	cmd.Add(key);
+	cmd.Add(start);
+	cmd.Add(stop);
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1664,14 +1770,14 @@ int RedisSync::LRange(const std::string& key, int start, int stop, RedisResult& 
 
 int RedisSync::LRem(const std::string& key, int count, std::string& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("LREM");
-	buff.push_back(key);
-	buff.push_back(std::to_string(count));
-	buff.push_back(value);
+	RedisCommand cmd;
+	cmd.Add("LREM");
+	cmd.Add(key);
+	cmd.Add(count);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1689,14 +1795,14 @@ int RedisSync::LRem(const std::string& key, int count, std::string& value)
 
 int RedisSync::LTrim(const std::string& key, int start, int stop)
 {
-	std::vector<std::string> buff;
-	buff.push_back("LTRIM");
-	buff.push_back(key);
-	buff.push_back(std::to_string(start));
-	buff.push_back(std::to_string(stop));
+	RedisCommand cmd;
+	cmd.Add("LTRIM");
+	cmd.Add(key);
+	cmd.Add(start);
+	cmd.Add(stop);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1716,64 +1822,12 @@ int RedisSync::LTrim(const std::string& key, int start, int stop)
 
 int RedisSync::LLen(const std::string& key)
 {
-	std::vector<std::string> buff;
-	buff.push_back("LLEN");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("LLEN");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
-	{
-		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
-	}
-	if (rst.IsInt())
-	{
-		return rst.ToInt();
-	}
-	LogError("UnKnown Error");
-	return 0;
-}
-
-int RedisSync::SAdd(const std::string& key, const std::string& value)
-{
-	std::vector<std::string> buff;
-	buff.push_back("SADD");
-	buff.push_back(key);
-	buff.push_back(value);
-
-	RedisResult rst;
-	if (!DoCommand(buff, rst))
-	{
-		return -1;
-	}
-	if (rst.IsError())
-	{
-		return 0;
-	}
-	if (rst.IsInt())
-	{
-		return rst.ToInt();
-	}
-	LogError("UnKnown Error");
-	return 0;
-}
-
-int RedisSync::SAdds(const std::string& key, const std::vector<std::string>& values)
-{
-	std::vector<std::string> buff;
-	buff.push_back("SADD");
-	buff.push_back(key);
-
-	for (auto it = values.begin(); it != values.end(); ++it)
-	{
-		buff.push_back(*it);
-	}
-
-	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1791,13 +1845,13 @@ int RedisSync::SAdds(const std::string& key, const std::vector<std::string>& val
 
 int RedisSync::SRem(const std::string& key, const std::string& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("SREM");
-	buff.push_back(key);
-	buff.push_back(value);
+	RedisCommand cmd;
+	cmd.Add("SREM");
+	cmd.Add(key);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1815,17 +1869,17 @@ int RedisSync::SRem(const std::string& key, const std::string& value)
 
 int RedisSync::SRems(const std::string& key, const std::vector<std::string>& values)
 {
-	std::vector<std::string> buff;
-	buff.push_back("SREM");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("SREM");
+	cmd.Add(key);
 
 	for (auto it = values.begin(); it != values.end(); ++it)
 	{
-		buff.push_back(*it);
+		cmd.Add(*it);
 	}
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1848,14 +1902,14 @@ int RedisSync::Sinter(const std::vector<std::string>& keys, RedisResult& rst)
 		return 0;
 	}
 
-	std::vector<std::string> buff;
-	buff.push_back("SINTER");
+	RedisCommand cmd;
+	cmd.Add("SINTER");
 	for (const auto& it : keys)
 	{
-		buff.push_back(it);
+		cmd.Add(it);
 	}
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1877,11 +1931,11 @@ int RedisSync::Sinter(const std::vector<std::string>& keys, RedisResult& rst)
 
 int RedisSync::SMembers(const std::string& key, RedisResult& rst)
 {
-	std::vector<std::string> buff;
-	buff.push_back("SMEMBERS");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("SMEMBERS");
+	cmd.Add(key);
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1903,13 +1957,13 @@ int RedisSync::SMembers(const std::string& key, RedisResult& rst)
 
 int RedisSync::SISMember(const std::string& key, const std::string& value)
 {
-	std::vector<std::string> buff;
-	buff.push_back("SISMEMBER");
-	buff.push_back(key);
-	buff.push_back(value);
+	RedisCommand cmd;
+	cmd.Add("SISMEMBER");
+	cmd.Add(key);
+	cmd.Add(value);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1927,12 +1981,12 @@ int RedisSync::SISMember(const std::string& key, const std::string& value)
 
 int RedisSync::SCard(const std::string& key)
 {
-	std::vector<std::string> buff;
-	buff.push_back("SCARD");
-	buff.push_back(key);
+	RedisCommand cmd;
+	cmd.Add("SCARD");
+	cmd.Add(key);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1956,21 +2010,21 @@ int RedisSync::Eval(const std::string& script, const std::vector<std::string>& k
 
 int RedisSync::Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst)
 {
-	std::vector<std::string> buff;
-	buff.push_back("EVAL");
-	buff.push_back(script);
-	buff.push_back(std::to_string(keys.size()));
+	RedisCommand cmd;
+	cmd.Add("EVAL");
+	cmd.Add(script);
+	cmd.Add(keys.size());
 
 	for (const auto& it : keys)
 	{
-		buff.push_back(it);
+		cmd.Add(it);
 	}
 	for (const auto& it : args)
 	{
-		buff.push_back(it);
+		cmd.Add(it);
 	}
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
@@ -1981,34 +2035,106 @@ int RedisSync::Eval(const std::string& script, const std::vector<std::string>& k
 	return 1;
 }
 
-int RedisSync::Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args)
+int RedisSync::Evalsha(const std::string& scriptsha1, const std::vector<std::string>& keys, const std::vector<std::string>& args)
 {
 	RedisResult rst;
-	return Evalsha(script, keys, args, rst);
+	return Evalsha(scriptsha1, keys, args, rst);
 }
 
-int RedisSync::Evalsha(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst)
+int RedisSync::Evalsha(const std::string& scriptsha1, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst)
 {
-	std::vector<std::string> buff;
-	buff.push_back("EVALSHA");
-	buff.push_back(script);
-	buff.push_back(std::to_string(keys.size()));
+	RedisCommand cmd;
+	cmd.Add("EVALSHA");
+	cmd.Add(scriptsha1);
+	cmd.Add(keys.size());
 
 	for (const auto& it : keys)
 	{
-		buff.push_back(it);
+		cmd.Add(it);
 	}
 	for (const auto& it : args)
 	{
-		buff.push_back(it);
+		cmd.Add(it);
 	}
 
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}
 	if (rst.IsError())
 	{
+		return 0;
+	}
+	return 1;
+}
+
+int RedisSync::ScriptExists(const std::string& scriptsha)
+{
+	RedisCommand cmd;
+	cmd.Add("SCRIPT");
+	cmd.Add("EXISTS");
+	cmd.Add(scriptsha);
+
+	RedisResult rst;
+	if (!DoCommand(cmd, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		return 0;
+	}
+	if (rst.IsInt())
+	{
+		return rst.ToInt();
+	}
+	LogError("UnKnown Error");
+	return 0;
+}
+
+int RedisSync::ScriptFlush()
+{
+	RedisCommand cmd;
+	cmd.Add("SCRIPT");
+	cmd.Add("FLUSH");
+
+	RedisResult rst;
+	if (!DoCommand(cmd, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		// 未设置成功
+		return 0;
+	}
+	return 1;
+}
+
+int RedisSync::ScriptKill()
+{
+	RedisCommand cmd;
+	cmd.Add("SCRIPT");
+	cmd.Add("KILL");
+
+	RedisResult rst;
+	if (!DoCommand(cmd, rst))
+	{
+		return -1;
+	}
+	if (rst.IsError())
+	{
+		// 命令错误
+		return 0;
+	}
+	if (rst.IsNull())
+	{
+		// 未设置成功
 		return 0;
 	}
 	return 1;
@@ -2016,13 +2142,13 @@ int RedisSync::Evalsha(const std::string& script, const std::vector<std::string>
 
 int RedisSync::ScriptLoad(const std::string& script, std::string& sha1)
 {
-	std::vector<std::string> buff;
-	buff.push_back("SCRIPT");
-	buff.push_back("LOAD");
-	buff.push_back(script);
+	RedisCommand cmd;
+	cmd.Add("SCRIPT");
+	cmd.Add("LOAD");
+	cmd.Add(script);
 
 	RedisResult rst;
-	if (!DoCommand(buff, rst))
+	if (!DoCommand(cmd, rst))
 	{
 		return -1;
 	}

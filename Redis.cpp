@@ -13,11 +13,11 @@ Redis::~Redis()
 
 int Redis::ReadReply(RedisResult& rst)
 {
-	m_readreplylen = 0;
+	m_readlen = 0;
 	int r = _ReadReply(rst);
-	if (r == 0 && m_readreplylen > 0)
+	if (r == 0 && m_readlen > 0)
 	{
-		if (!ReadRollback(m_readreplylen))
+		if (!ReadRollback(m_readlen))
 		{
 			return -2;
 		}
@@ -33,7 +33,7 @@ int Redis::_ReadReply(RedisResult& rst)
 	{
 		return len;
 	}
-	m_readreplylen += len;
+	m_readlen += len;
 
 	len -= 2; // 后面的\r\n
 
@@ -76,7 +76,7 @@ int Redis::_ReadReply(RedisResult& rst)
 				{
 					return len;
 				}
-				m_readreplylen += len;
+				m_readlen += len;
 
 				len -= 2; // \r\n
 
@@ -125,17 +125,57 @@ int Redis::_ReadReply(RedisResult& rst)
 	return 1;
 }
 
-void Redis::FormatCommand(const std::vector<std::string>& buff, std::stringstream &cmdbuff)
+void RedisCommand::FromString(const std::string& cmd)
 {
-	cmdbuff << "*" << buff.size() << "\r\n";
-	for (auto it = buff.begin(); it != buff.end(); ++it)
+	std::string temp = cmd;
+	int protect = 0;	// 1 单引号保护  2 双引号保护
+	int size = (int)temp.size();
+	for (int i = 0; i < size; ++i)
 	{
-		cmdbuff << "$" << it->size() << "\r\n" << *it << "\r\n";
+		if (protect == 1)
+		{
+			if (temp[i] == '\'')
+			{
+				temp[i] = '\0';
+				protect = 0;
+			}
+			continue;
+		}
+		if (protect == 2)
+		{
+			if (temp[i] == '\"')
+			{
+				temp[i] = '\0';
+				protect = 0;
+			}
+			continue;
+		}
+		if (temp[i] == ' ' || temp[i] == '\t')
+		{
+			temp[i] = '\0';
+		}
+		if (temp[i] == '\'')
+		{
+			protect = 1; // 进入单引号
+			temp[i] = '\0';
+		}
+		if (temp[i] == '\"')
+		{
+			protect = 2; // 进入双引号
+			temp[i] = '\0';
+		}
 	}
-}
 
-RedisResult::RedisResult() : error(false)
-{
+	for (int i = 0; i < size;)
+	{
+		if (temp[i] == '\0')
+		{
+			++i;
+			continue;
+		}
+		buff.push_back(&temp[i]);
+		i += (int)buff.back().size();
+	}
 }
 
 bool RedisResult::IsError() const

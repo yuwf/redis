@@ -6,9 +6,6 @@
 
 #include "RedisSyncSpinLock.h"
 
-#include "LLog.h"
-#define LogError LLOG_ERROR
-
 static std::string s_redisspinlockuuid = boost::uuids::to_string(boost::uuids::random_generator()());
 
 bool RedisSyncSpinLock::ScopedLock(const std::string& key, unsigned int maxlockmsec)

@@ -6,9 +6,6 @@
 
 #include "RedisSyncSubscribeLock.h"
 
-#include "LLog.h"
-#define LogError LLOG_ERROR
-
 static std::string s_redisasynclockuuid = boost::uuids::to_string(boost::uuids::random_generator()());
 
 RedisSyncSubscribeLock::RedisSyncSubscribeLock(RedisSync& redis)
