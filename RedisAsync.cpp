@@ -4,15 +4,25 @@
 #include "RedisAsync.h"
 #include "SpeedTest.h"
 
+static std::mutex s_mutexredisasync;
+static std::list<RedisAsync*> s_redisasync;
+
 RedisAsync::RedisAsync(bool subscribe)
 	: m_socket(m_ioservice)
 	, m_subscribe(subscribe)
 {
+	std::lock_guard<std::mutex> lock(s_mutexredisasync);
+	s_redisasync.push_back(this);
 }
 
 RedisAsync::~RedisAsync()
 {
-
+	std::lock_guard<std::mutex> lock(s_mutexredisasync);
+	auto it = std::find(s_redisasync.begin(), s_redisasync.end(), this);
+	if (it != s_redisasync.end())
+	{
+		s_redisasync.erase(it);
+	}
 }
 
 bool RedisAsync::InitRedis(const std::string& host, unsigned short port, const std::string& auth, int index)
@@ -206,16 +216,19 @@ void RedisAsync::UpdateReply()
 				cmdptr->callback(!cmdptr->rst[0].IsError(), cmdptr->rst[0]);
 			}
 		}
-		else if (cmdptr->type == 1 && cmdptr->cmd.size() == cmdptr->rst.size())
+		else if (cmdptr->type == 1)
 		{
-			m_queuecommands.pop_front(); // 先移除
-			if (m_globalcallback)
+			if (cmdptr->cmd.size() == cmdptr->rst.size())
 			{
-				m_globalcallback(true, cmdptr);
-			}
-			else if (cmdptr->multicallback)
-			{
-				cmdptr->multicallback(true, cmdptr->rst);
+				m_queuecommands.pop_front(); // 先移除
+				if (m_globalcallback)
+				{
+					m_globalcallback(true, cmdptr);
+				}
+				else if (cmdptr->multicallback)
+				{
+					cmdptr->multicallback(true, cmdptr->rst);
+				}
 			}
 		}
 		else
@@ -526,6 +539,76 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 	return ret;
 }
 
+std::string RedisAsync::Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string, std::string>& tags)
+{
+	int64_t ops = 0;
+	int64_t sendbytes = 0;
+	int64_t recvbytes = 0;
+	int64_t sendcost = 0; // 耗时 微妙
+	int64_t recvcost = 0;
+	{
+		std::lock_guard<std::mutex> lock(s_mutexredisasync);
+		for (auto it : s_redisasync)
+		{
+			ops += it->m_ops;
+			sendbytes += it->m_sendbytes;
+			recvbytes += it->m_recvbytes;
+			sendcost += it->m_sendcost;
+			recvcost += it->m_recvcost;
+		}
+	}
+
+	std::ostringstream ss;
+	if (type == Json)
+	{
+		ss << "{";
+		for (const auto& it : tags)
+		{
+			ss << "\"" << it.first << "\":\"" << it.second << "\",";
+		}
+		ss << "\"" << metricsprefix << "_ops\":" << ops << ",";
+		ss << "\"" << metricsprefix << "_sendbytes\":" << sendbytes << ",";
+		ss << "\"" << metricsprefix << "_recvbytes\":" << recvbytes << ",";
+		ss << "\"" << metricsprefix << "_sendcost\":" << sendcost << ",";
+		ss << "\"" << metricsprefix << "_recvcost\":" << recvcost;
+		ss << "}";
+	}
+	else if (type == Influx)
+	{
+		std::string tag;
+		for (const auto& it : tags)
+		{
+			tag += ("," + it.first + "=" + it.second);
+		}
+		ss << metricsprefix << "_ops" << tag << " value=" << ops << "i\n";
+		ss << metricsprefix << "_sendbytes" << tag << " value=" << sendbytes << "i\n";
+		ss << metricsprefix << "_recvbytes" << tag << " value=" << recvbytes << "i\n";
+		ss << metricsprefix << "_sendcost" << tag << " value=" << sendcost << "i\n";
+		ss << metricsprefix << "_recvcost" << tag << " value=" << recvcost << "i\n";
+	}
+	else if (type == Prometheus)
+	{
+		std::string tag;
+		if (!tags.empty())
+		{
+			tag += "{";
+			int index = 0;
+			for (const auto& it : tags)
+			{
+				tag += ((++index) == 1 ? "" : ",");
+				tag += (it.first + "=\"" + it.second + "\"");
+			}
+			tag += "}";
+		}
+		ss << metricsprefix << "_ops" << tag << " " << ops << "\n";
+		ss << metricsprefix << "_sendbytes" << tag << " " << sendbytes << "\n";
+		ss << metricsprefix << "_recvbytes" << tag << " " << recvbytes << "\n";
+		ss << metricsprefix << "_sendcost" << tag << " " << sendcost << "\n";
+		ss << metricsprefix << "_recvcost" << tag << " " << recvcost << "\n";
+	}
+	return ss.str();
+}
+
 bool RedisAsync::Connect()
 {
 	Close();
@@ -722,7 +805,6 @@ bool RedisAsync::Send(const RedisCommand& cmd)
 	m_sendbytes += sendbuff.size();
 	int64_t end = TSC();
 	m_sendcost += (end - begin) / TSCPerUS();
-	m_sendcosttsc += (end - begin);
 	if (ec)
 	{
 		LogError("RedisAsync Write Error, %s", ec.message().c_str());
@@ -747,7 +829,6 @@ bool RedisAsync::Send(const std::vector<RedisCommand>& cmds)
 	m_sendbytes += sendbuff.size();
 	int64_t end = TSC();
 	m_sendcost += (end - begin) / TSCPerUS();
-	m_sendcosttsc += (end - begin);
 	if (ec)
 	{
 		LogError("RedisAsync Write Error, %s", ec.message().c_str());
@@ -781,7 +862,6 @@ int RedisAsync::ReadToCRLF(char** buff, int mindatalen)
 		size_t size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
 		int64_t end = TSC();
 		m_recvcost += ((end - begin) / TSCPerUS());
-		m_recvcosttsc += (end - begin);
 		if (ec)
 		{
 			if (ec == boost::asio::error::would_block)

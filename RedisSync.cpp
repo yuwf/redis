@@ -1,18 +1,29 @@
 ﻿#include <stdio.h>
 #include <stdarg.h>
+#include <mutex>
 #include <boost/array.hpp>
 #include "RedisSync.h"
 #include "SpeedTest.h"
+
+static std::mutex s_mutexredissync;
+static std::list<RedisSync*> s_redissync;
 
 RedisSync::RedisSync(bool subscribe)
 	: m_socket(m_ioservice)
 	, m_subscribe(subscribe)
 {
+	std::lock_guard<std::mutex> lock(s_mutexredissync);
+	s_redissync.push_back(this);
 }
 
 RedisSync::~RedisSync()
 {
-
+	std::lock_guard<std::mutex> lock(s_mutexredissync);
+	auto it = std::find(s_redissync.begin(), s_redissync.end(), this);
+	if (it != s_redissync.end())
+	{
+		s_redissync.erase(it);
+	}
 }
 
 bool RedisSync::InitRedis(const std::string& host, unsigned short port, const std::string& auth, int index)
@@ -206,6 +217,76 @@ bool RedisSync::DoCommand(const std::vector<RedisCommand>& cmds, std::vector<Red
 		}
 	}
 	return true;
+}
+
+std::string RedisSync::Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string, std::string>& tags)
+{
+	int64_t ops = 0;
+	int64_t sendbytes = 0;
+	int64_t recvbytes = 0;
+	int64_t sendcost = 0; // 耗时 微妙
+	int64_t recvcost = 0;
+	{
+		std::lock_guard<std::mutex> lock(s_mutexredissync);
+		for (auto it : s_redissync)
+		{
+			ops += it->m_ops;
+			sendbytes += it->m_sendbytes;
+			recvbytes += it->m_recvbytes;
+			sendcost += it->m_sendcost;
+			recvcost += it->m_recvcost;
+		}
+	}
+	
+	std::ostringstream ss;
+	if (type == Json)
+	{
+		ss << "{";
+		for (const auto& it : tags)
+		{
+			ss << "\"" << it.first << "\":\"" << it.second << "\",";
+		}
+		ss << "\"" << metricsprefix << "_ops\":" << ops << ",";
+		ss << "\"" << metricsprefix << "_sendbytes\":" << sendbytes << ",";
+		ss << "\"" << metricsprefix << "_recvbytes\":" << recvbytes << ",";
+		ss << "\"" << metricsprefix << "_sendcost\":" << sendcost << ",";
+		ss << "\"" << metricsprefix << "_recvcost\":" << recvcost;
+		ss << "}";
+	}
+	else if (type == Influx)
+	{
+		std::string tag;
+		for (const auto& it : tags)
+		{
+			tag += ("," + it.first + "=" + it.second);
+		}
+		ss << metricsprefix << "_ops" << tag << " value=" << ops << "i\n";
+		ss << metricsprefix << "_sendbytes" << tag << " value=" << sendbytes << "i\n";
+		ss << metricsprefix << "_recvbytes" << tag << " value=" << recvbytes << "i\n";
+		ss << metricsprefix << "_sendcost" << tag << " value=" << sendcost << "i\n";
+		ss << metricsprefix << "_recvcost" << tag << " value=" << recvcost << "i\n";
+	}
+	else if (type == Prometheus)
+	{
+		std::string tag;
+		if (!tags.empty())
+		{
+			tag += "{";
+			int index = 0;
+			for (const auto& it : tags)
+			{
+				tag += ((++index) == 1 ? "" : ",");
+				tag += (it.first + "=\"" + it.second + "\"");
+			}
+			tag += "}";
+		}
+		ss << metricsprefix << "_ops" << tag << " " << ops << "\n";
+		ss << metricsprefix << "_sendbytes" << tag << " " << sendbytes << "\n";
+		ss << metricsprefix << "_recvbytes" << tag << " " << recvbytes << "\n";
+		ss << metricsprefix << "_sendcost" << tag << " " << sendcost << "\n";
+		ss << metricsprefix << "_recvcost" << tag << " " << recvcost << "\n";
+	}
+	return ss.str();
 }
 
 bool RedisSync::SubScribe(const std::string& channel)
@@ -724,7 +805,6 @@ bool RedisSync::Send(const RedisCommand& cmd)
 	m_sendbytes += sendbuff.size();
 	int64_t end = TSC();
 	m_sendcost += (end - begin) / TSCPerUS();
-	m_sendcosttsc += (end - begin);
 	if (ec)
 	{
 		LogError("RedisSync Write Error, %s", ec.message().c_str());
@@ -749,7 +829,6 @@ bool RedisSync::Send(const std::vector<RedisCommand>& cmds)
 	m_sendbytes += sendbuff.size();
 	int64_t end = TSC();
 	m_sendcost += (end - begin) / TSCPerUS();
-	m_sendcosttsc += (end - begin);
 	if (ec)
 	{
 		LogError("RedisSync Write Error, %s", ec.message().c_str());
@@ -783,7 +862,6 @@ int RedisSync::ReadToCRLF(char** buff, int mindatalen)
 		size_t size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
 		int64_t end = TSC();
 		m_recvcost += ((end - begin) / TSCPerUS());
-		m_recvcosttsc += (end - begin);
 		if (ec)
 		{
 			if (ec == boost::asio::error::would_block)

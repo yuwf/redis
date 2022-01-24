@@ -4,6 +4,7 @@
 // by yuwf qingting.water@gmail.com
 
 #include <memory>
+#include <atomic>
 #include <boost/asio.hpp>
 #include "Redis.h"
 
@@ -46,8 +47,19 @@ public:
 	int64_t RecvBytes() const { return m_recvbytes; }
 	int64_t SendCost() const { return m_sendcost; }
 	int64_t RecvCost() const { return m_recvcost; }
-	int64_t NetIOCostTSC() const { return m_sendcosttsc + m_recvcosttsc; }
-	void ResetOps() { m_ops = m_sendbytes = m_recvbytes = m_sendcost = m_recvcost = m_sendcosttsc = m_recvcosttsc = 0; }
+	void ResetOps() { m_ops.store(0); m_sendbytes.store(0); m_recvbytes.store(0); m_sendcost.store(0); m_recvcost.store(0); }
+
+	// 快照数据
+	// 【参数metricsprefix和tags 不要有相关格式禁止的特殊字符 内部不对这两个参数做任何格式转化】
+	// metricsprefix指标名前缀 内部产生指标如下
+	// metricsprefix_ops 调用次数
+	// metricsprefix_sendbytes 发送字节数
+	// metricsprefix_recvbytes 接受字节数
+	// metricsprefix_sendcost 发送时间 微秒
+	// metricsprefix_recvcost 接受时间 微秒
+	// tags额外添加的标签，内部不产生标签
+	enum SnapshotType { Json, Influx, Prometheus };
+	static std::string Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string,std::string>& tags = std::map<std::string, std::string>());
 
 	//////////////////////////////////////////////////////////////////////////
 	// 订阅相关，Redis发生了重连会自动重新订阅之前订阅的频道
@@ -122,13 +134,11 @@ protected:
 	int m_index = 0;
 
 	// 统计使用
-	int64_t m_ops = 0;
-	int64_t m_sendbytes = 0;
-	int64_t m_recvbytes = 0;
-	int64_t m_sendcost = 0; // 耗时 微妙
-	int64_t m_recvcost = 0;
-	int64_t m_sendcosttsc = 0; // 耗时 CPU频率
-	int64_t m_recvcosttsc = 0;
+	std::atomic<int64_t> m_ops = { 0 };
+	std::atomic<int64_t> m_sendbytes = { 0 };
+	std::atomic<int64_t> m_recvbytes = { 0 };
+	std::atomic<int64_t> m_sendcost = { 0 }; // 耗时 微妙
+	std::atomic<int64_t> m_recvcost = { 0 };
 
 private:
 	// 禁止拷贝

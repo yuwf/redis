@@ -1,12 +1,12 @@
-#include "SpeedTest.h"
+﻿#include "SpeedTest.h"
 #include <chrono>
+#include <iosfwd>
 
 #include "LLog.h"
 #define LogInfo LLOG_INFO
 
-thread_local SpeedTestData g_default_speedtestdata;
-bool g_record_speedtestdata = false;
-thread_local bool g_record_speedtestdata_thread = false;
+SpeedTestRecord g_speedtestrecord;
+
 
 int64_t TSCPerUS()
 {
@@ -15,14 +15,14 @@ int64_t TSCPerUS()
 	{
 		using namespace std::chrono_literals;
 
-		// ����Ԥ��
+		// 代码预热
 		for (int i = 0; i < 100; ++i)
 		{
 			(void)std::chrono::high_resolution_clock::now();
 			TSC();
 		}
 
-		// ���� rdtscp ָ��ʹ�õ�ʱ��Ƶ��
+		// 计算 rdtscp 指令使用的时钟频率
 		auto start = std::chrono::high_resolution_clock::now();
 		int64_t c1 = TSC();
 		std::this_thread::sleep_for(1ms);
@@ -45,30 +45,99 @@ int64_t TSCPerUS()
 	return CyclesPerMicroSecond;
 }
 
-SpeedTest::SpeedTest(SpeedTestData& _testdata_, const char* _name_, int _index_)
-	: begin_tsc(TSC())
-	, testdata(_testdata_)
-	, testpos(_name_, _index_)
+void SpeedTestRecord::Clear(SpeedTestPositionMap& lastdata)
 {
+	boost::unique_lock<boost::shared_mutex> lock(mutex);
+	records.swap(lastdata);
 }
 
-SpeedTest::~SpeedTest()
+std::string SpeedTestRecord::Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string, std::string>& tags)
 {
-	int64_t tsc = TSC() - begin_tsc;
-
-	// ��¼ nameֵ��Ч�ż�¼
-	if ((g_record_speedtestdata || g_record_speedtestdata_thread) && testpos.name)
+	SpeedTestPositionMap lastdata;
 	{
-		auto it = testdata.position.find(testpos);
-		if (it == testdata.position.end())
+		boost::unique_lock<boost::shared_mutex> lock(mutex);
+		lastdata = records;
+	}
+	std::ostringstream ss;
+	if (type == Json)
+	{
+		ss << "[";
+		int index = 0;
+		for (const auto& it : lastdata)
 		{
-			SpeedTestValue value;
-			value.calltimes = 1;
-			value.elapsedTSC = tsc;
-			value.elapsedMaxTSC = tsc;
-			testdata.position[testpos] = value;
+			ss << ((++index) == 1 ? "{" : ",{");
+			for (const auto& it : tags)
+			{
+				ss << "\"" << it.first << "\":\"" << it.second << "\",";
+			}
+			ss <<  "\"name\":\"" << it.first.name << "\",";
+			ss <<  "\"num\":" << it.first.num << ",";
+			ss << "\"" << metricsprefix << "_calltimes\":" << it.second.calltimes << ",";
+			ss << "\"" << metricsprefix << "_elapse\":" << (it.second.elapsedTSC / TSCPerUS()) << ",";
+			ss << "\"" << metricsprefix << "_maxelapse\":" << (it.second.elapsedMaxTSC / TSCPerUS());
+			ss << "}";
 		}
-		else
+		ss << "]";
+	}
+	else if (type == Influx)
+	{
+		std::string tag;
+		for (const auto& it : tags)
+		{
+			tag += ("," + it.first + "=" + it.second);
+		}
+		for (const auto& it : lastdata)
+		{
+			ss << metricsprefix << "_calltimes";
+			ss << ",name=" << it.first.name << ",num=" << it.first.num << tag;
+			ss << " value=" << it.second.calltimes << "i\n";
+
+			ss << metricsprefix << "_elapse";
+			ss << ",name=" << it.first.name << ",num=" << it.first.num << tag;
+			ss << " value=" << (it.second.elapsedTSC / TSCPerUS()) << "i\n";
+
+			ss << metricsprefix << "_maxelapse";
+			ss << ",name=" << it.first.name << ",num=" << it.first.num << tag;
+			ss << " value=" << (it.second.elapsedMaxTSC / TSCPerUS()) << "i\n";
+		}
+	}
+	else if (type == Prometheus)
+	{
+		std::string tag;
+		for (const auto& it : tags)
+		{
+			tag += ("," + it.first + "=\"" + it.second + "\"");
+		}
+		for (const auto& it : lastdata)
+		{
+			ss << metricsprefix << "_calltimes";
+			ss << "{name=\"" << it.first.name << "\",num=\"" << it.first.num << "\"" << tag << "}";
+			ss << " " << it.second.calltimes << "\n";
+
+			ss << metricsprefix << "_elapse";
+			ss << "{name=\"" << it.first.name << "\",num=\"" << it.first.num << "\"" << tag << "}";
+			ss << " " << (it.second.elapsedTSC / TSCPerUS()) << "\n";
+
+			ss << metricsprefix << "_maxelapse";
+			ss << "{name=\"" << it.first.name << "\",num=\"" << it.first.num << "\"" << tag << "}";
+			ss << " " << (it.second.elapsedMaxTSC / TSCPerUS()) << "\n";
+		}
+	}
+	return ss.str();
+}
+
+void SpeedTestRecord::Add(const SpeedTestPosition& testpos, int64_t tsc)
+{
+	// 记录 name值有效才记录
+	if (!brecord || !testpos.name)
+	{
+		return;
+	}
+	// 先用共享锁 如果存在直接修改
+	{
+		std::shared_lock<boost::shared_mutex> lock(mutex);
+		auto it = records.find(testpos);
+		if (it != records.end())
 		{
 			it->second.calltimes++;
 			it->second.elapsedTSC += tsc;
@@ -76,13 +145,37 @@ SpeedTest::~SpeedTest()
 			{
 				it->second.elapsedMaxTSC = tsc;
 			}
+			return; // 直接返回
 		}
 	}
-
-	int64_t elapsed = tsc / TSCPerUS();
-	if (testdata.greaterUSLog > 0 && elapsed > testdata.greaterUSLog)
+	// 不存在直接用写锁
 	{
-		LogInfo("SpeedTest %s Speed %lldUS", testpos.name ? testpos.name : "", elapsed);
+		boost::unique_lock<boost::shared_mutex> lock(mutex);
+		SpeedTestValue& value = records[testpos];
+		value.calltimes = 1;
+		value.elapsedTSC = tsc;
+		value.elapsedMaxTSC = tsc;
+	}
+}
+
+SpeedTest::SpeedTest(const char* _name_, int _index_)
+	: begin_tsc(TSC())
+	, testpos(_name_, _index_)
+{
+}
+
+SpeedTest::~SpeedTest()
+{
+	int64_t tsc = TSC() - begin_tsc;
+	g_speedtestrecord.Add(testpos, tsc);
+
+	if (g_speedtestrecord.greaterUSLog > 0)
+	{
+		int64_t elapsed = tsc / TSCPerUS();
+		if (elapsed > g_speedtestrecord.greaterUSLog)
+		{
+			LogInfo("SpeedTest %s Speed\t%lldMS\t%lldUS", testpos.name ? testpos.name : "", elapsed / 1000, elapsed % 1000);
+		}
 	}
 }
 

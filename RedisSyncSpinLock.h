@@ -4,10 +4,9 @@
 // by yuwf qingting.water@gmail.com
 
 #include <unordered_map>
-#include <chrono>
-#include <thread>
+#include <shared_mutex>
+#include <atomic>
 #include "RedisSync.h"
-#include "SpeedTest.h"
 
 // 自旋锁，外部需要自旋检测
 class RedisSyncSpinLock
@@ -46,6 +45,7 @@ protected:
 	std::string m_key;		// 加锁的Key
 	bool m_locking = false;	// 是否已加锁
 	int64_t m_beginTSC = 0;	// 开始加锁时CPU频率值
+	int64_t m_failTSC = 0;
 	int64_t m_lockTSC = 0;	// 加锁成功时CPU频率值
 	int m_spinCount = 0;	// 自旋次数
 };
@@ -54,37 +54,96 @@ protected:
 // 用于记录统计锁的情况
 struct RedisSpinLockData
 {
-	int lockcount = 0;		// 加锁次数
-	int faillockcount = 0;
-	int64_t trylockTSC = 0;// 尝试加锁tsc
-	int64_t trylockMaxTSC = 0;
-	int64_t lockedTSC = 0;	// 加锁tsc 针对加锁成功的
-	int64_t lockedMaxTSC = 0;
-	int spincount = 0;		// 自旋锁
+	RedisSpinLockData() {}
+	RedisSpinLockData(const RedisSpinLockData& other)
+		: lockcount(other.lockcount.load())
+		, faillockcount(other.faillockcount.load())
+		, trylockTSC(other.trylockTSC.load())
+		, trylockMaxTSC(other.trylockMaxTSC.load())
+		, lockedTSC(other.lockedTSC.load())
+		, lockedMaxTSC(other.lockedMaxTSC.load())
+		, spincount(other.spincount.load())
+	{
+	}
+
+	std::atomic<int64_t> lockcount = { 0 };		// 加锁次数
+	std::atomic<int64_t> faillockcount = { 0 };
+	std::atomic<int64_t> trylockTSC = { 0 };	// 尝试加锁tsc
+	std::atomic<int64_t> trylockMaxTSC = { 0 };
+	std::atomic<int64_t> lockedTSC = { 0 };		// 加锁tsc 针对加锁成功的
+	std::atomic<int64_t> lockedMaxTSC = { 0 };
+	std::atomic<int64_t> spincount = { 0 };		// 自旋锁
 
 	RedisSpinLockData& operator += (const RedisSpinLockData& other)
 	{
 		lockcount += other.lockcount;
 		faillockcount += other.faillockcount;
 		trylockTSC += other.trylockTSC;
-		if (trylockMaxTSC < other.trylockMaxTSC)
+		int64_t maxtsc = other.trylockMaxTSC.load();
+		if (trylockMaxTSC < maxtsc)
 		{
-			trylockMaxTSC = other.trylockMaxTSC;
+			trylockMaxTSC = maxtsc;
 		}
 		lockedTSC += other.lockedTSC;
-		if (lockedMaxTSC < other.lockedMaxTSC)
+		maxtsc = other.lockedMaxTSC.load();
+		if (lockedMaxTSC < maxtsc)
 		{
-			lockedMaxTSC = other.lockedMaxTSC;
+			lockedMaxTSC = maxtsc;
 		}
 		spincount += other.spincount;
 		return *this;
 	}
+
+	RedisSpinLockData& operator = (const RedisSpinLockData& other)
+	{
+		lockcount = other.lockcount.load();
+		faillockcount = other.faillockcount.load();
+		trylockTSC = other.trylockTSC.load();
+		trylockMaxTSC = other.trylockMaxTSC.load();
+		lockedTSC = other.lockedTSC.load();
+		lockedMaxTSC = other.lockedMaxTSC.load();
+		spincount = other.spincount.load();
+		return *this;
+	}
 };
 
-typedef std::unordered_map<std::string, RedisSpinLockData> RedisSpinLockRecord;
-extern thread_local RedisSpinLockRecord g_default_redisspinlockdata;
-extern bool g_record_redisspinlockdata;						// 是否记录锁统计数据 默认不记录 全部线程
-extern thread_local bool g_record_redisspinlockdata_thread;	// 当前线程是否记录 默认不记录
+typedef std::unordered_map<std::string, RedisSpinLockData> RedisSpinLockDataMap;
+
+class RedisSpinLockRecord
+{
+public:
+	void Clear(RedisSpinLockDataMap& lastdata);
+
+	// 快照数据
+	// 【参数metricsprefix和tags 不要有相关格式禁止的特殊字符 内部不对这两个参数做任何格式转化】
+	// metricsprefix指标名前缀 内部产生指标如下
+	// metricsprefix_lockcount 加锁次数
+	// metricsprefix_faillockcount 失败次数
+	// metricsprefix_trylock 尝试加锁的时间 微秒
+	// metricsprefix_maxtrylock 尝试加锁的最大时间 微秒
+	// metricsprefix_locked 加锁的时间 微秒
+	// metricsprefix_maxlocked 加锁的最大时间 微秒
+	// metricsprefix_spincount 加锁时自旋的次数
+	// tags额外添加的标签，内部产生标签 key:加锁的key名
+	enum SnapshotType { Json, Influx, Prometheus };
+	std::string Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string, std::string>& tags = std::map<std::string, std::string>());
+
+	void Add(const std::string& key, int64_t beginTSC, int64_t endTSC, int64_t lockTSC, int64_t failTSC, int spinCount, bool locked);
+
+	void SetRecord(bool b) { brecord = b; }
+
+protected:
+	friend class RedisSyncSpinLocker;
+	// 记录的测试数据
+	boost::shared_mutex mutex;
+	RedisSpinLockDataMap records;
+
+	// 是否记录测试数据
+	bool brecord = true;
+
+};
+
+extern RedisSpinLockRecord g_redisspinlockrecord;
 
 
 #endif

@@ -1,9 +1,13 @@
 ﻿
+#include <chrono>
+#include <thread>
+
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/thread.hpp>
 
+#include "SpeedTest.h"
 #include "RedisSyncSpinLock.h"
 
 static std::string s_redisspinlockuuid = boost::uuids::to_string(boost::uuids::random_generator()());
@@ -174,9 +178,11 @@ RedisSyncSpinLocker::RedisSyncSpinLocker(RedisSync& redis, const std::string& ke
 		}
 		else
 		{
-			int64_t time = (TSC() - m_beginTSC) / TSCPerUS();
+			int64_t tsc = TSC();
+			int64_t time = (tsc - m_beginTSC) / TSCPerUS();
 			if (time > waitmsec * 1000) // 
 			{
+				m_failTSC = tsc;
 				LogError("********* %s Lock time more than %d(US) *********", m_key.c_str(), time);
 				break;
 			}
@@ -191,34 +197,196 @@ RedisSyncSpinLocker::~RedisSyncSpinLocker()
 	{
 		m_lock.ScopedUnLock(m_key);
 	}
-	
-	if (g_record_redisspinlockdata || g_record_redisspinlockdata_thread)
-	{
-		int64_t unlock_tsc = TSC();
 
-		RedisSpinLockData& data = g_default_redisspinlockdata[m_key];
-		data.lockcount++;
-		data.trylockTSC += (m_lockTSC - m_beginTSC);
-		if (data.trylockMaxTSC < (m_lockTSC - m_beginTSC))
+	int64_t unlock_tsc = TSC();
+	g_redisspinlockrecord.Add(m_key, m_beginTSC, unlock_tsc, m_lockTSC, m_failTSC, m_spinCount, m_locking);
+
+}
+
+void RedisSpinLockRecord::Clear(RedisSpinLockDataMap& lastdata)
+{
+	boost::unique_lock<boost::shared_mutex> lock(mutex);
+	records.swap(lastdata);
+}
+
+std::string RedisSpinLockRecord::Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string, std::string>& tags)
+{
+	RedisSpinLockDataMap lastdata;
+	{
+		boost::unique_lock<boost::shared_mutex> lock(mutex);
+		lastdata = records;
+	}
+	std::ostringstream ss;
+	if (type == Json)
+	{
+		ss << "[";
+		int index = 0;
+		for (const auto& it : lastdata)
 		{
-			data.trylockMaxTSC = (m_lockTSC - m_beginTSC);
-		}
-		if (m_locking)
-		{
-			data.lockedTSC += (unlock_tsc - m_lockTSC);
-			if (data.lockedMaxTSC < (unlock_tsc - m_lockTSC))
+			ss << ((++index) == 1 ? "{" : ",{");
+			for (const auto& it : tags)
 			{
-				data.lockedMaxTSC = (unlock_tsc - m_lockTSC);
+				ss << "\"" << it.first << "\":\"" << it.second << "\",";
 			}
+			ss << "\"key\":\"" << it.first << "\",";
+			ss << "\"" << metricsprefix << "_lockcount\":" << it.second.lockcount << ",";
+			ss << "\"" << metricsprefix << "_faillockcount\":" << it.second.faillockcount << ",";
+			ss << "\"" << metricsprefix << "_trylock\":" << (it.second.trylockTSC / TSCPerUS()) << ",";
+			ss << "\"" << metricsprefix << "_maxtrylock\":" << (it.second.trylockMaxTSC / TSCPerUS()) << ",";
+			ss << "\"" << metricsprefix << "_locked\":" << (it.second.lockedTSC / TSCPerUS()) << ",";
+			ss << "\"" << metricsprefix << "_maxlocked\":" << (it.second.lockedMaxTSC / TSCPerUS()) << ",";
+			ss << "\"" << metricsprefix << "_spincount\":" << it.second.spincount;
+			ss << "}";
+		}
+		ss << "]";
+	}
+	else if (type == Influx)
+	{
+		std::string tag;
+		for (const auto& it : tags)
+		{
+			tag += ("," + it.first + "=" + it.second);
+		}
+		for (const auto& it : lastdata)
+		{
+			ss << metricsprefix << "_lockcount";
+			ss << ",key=" << it.first << tag;
+			ss << " value=" << it.second.lockcount << "i\n";
+
+			ss << metricsprefix << "_faillockcount";
+			ss << ",key=" << it.first << tag;
+			ss << " value=" << it.second.faillockcount << "i\n";
+
+			ss << metricsprefix << "_trylock";
+			ss << ",key=" << it.first << tag;
+			ss << " value=" << (it.second.trylockTSC / TSCPerUS()) << "i\n";
+
+			ss << metricsprefix << "_maxtrylock";
+			ss << ",key=" << it.first << tag;
+			ss << " value=" << (it.second.trylockMaxTSC / TSCPerUS()) << "i\n";
+
+			ss << metricsprefix << "_locked";
+			ss << ",key=" << it.first << tag;
+			ss << " value=" << (it.second.lockedTSC / TSCPerUS()) << "i\n";
+
+			ss << metricsprefix << "_maxlocked";
+			ss << ",key=" << it.first << tag;
+			ss << " value=" << (it.second.lockedMaxTSC / TSCPerUS()) << "i\n";
+
+			ss << metricsprefix << "_spincount";
+			ss << ",key=" << it.first << tag;
+			ss << " value=" << it.second.spincount << "i\n";
+		}
+	}
+	else if (type == Prometheus)
+	{
+		std::string tag;
+		for (const auto& it : tags)
+		{
+			tag += ("," + it.first + "=\"" + it.second + "\"");
+		}
+		for (const auto& it : lastdata)
+		{
+			ss << metricsprefix << "_lockcount";
+			ss << "{key=\"" << it.first << "\"" << tag << "}";
+			ss << " " << it.second.lockcount << "\n";
+
+			ss << metricsprefix << "_faillockcount";
+			ss << "{key=\"" << it.first << "\"" << tag << "}";
+			ss << " " << it.second.faillockcount << "\n";
+
+			ss << metricsprefix << "_trylock";
+			ss << "{key=\"" << it.first << "\"" << tag << "}";
+			ss << " " << (it.second.trylockTSC / TSCPerUS()) << "\n";
+
+			ss << metricsprefix << "_maxtrylock";
+			ss << "{key=\"" << it.first << "\"" << tag << "}";
+			ss << " " << (it.second.trylockMaxTSC / TSCPerUS()) << "\n";
+
+			ss << metricsprefix << "_locked";
+			ss << "{key=\"" << it.first << "\"" << tag << "}";
+			ss << " " << (it.second.lockedTSC / TSCPerUS()) << "\n";
+
+			ss << metricsprefix << "_maxlocked";
+			ss << "{key=\"" << it.first << "\"" << tag << "}";
+			ss << " " << (it.second.lockedMaxTSC / TSCPerUS()) << "\n";
+
+			ss << metricsprefix << "_spincount";
+			ss << "{key=\"" << it.first << "\"" << tag << "}";
+			ss << " " << it.second.spincount << "\n";
+		}
+	}
+	return ss.str();
+}
+
+void RedisSpinLockRecord::Add(const std::string& key, int64_t beginTSC, int64_t endTSC, int64_t lockTSC, int64_t failTSC, int spinCount, bool locked)
+{
+	if (!brecord)
+	{
+		return;
+	}
+
+	// 先用共享锁 如果存在直接修改
+	{
+		boost::shared_lock<boost::shared_mutex> lock(mutex);
+		auto it = records.find(key);
+		if (it != records.end())
+		{
+			it->second.lockcount++;
+			if (locked)
+			{
+				int64_t tsc = lockTSC - beginTSC;
+				it->second.trylockTSC += tsc;
+				if (it->second.trylockMaxTSC < tsc)
+				{
+					it->second.trylockMaxTSC = tsc;
+				}
+				tsc = endTSC - lockTSC;
+				it->second.lockedTSC += tsc;
+				if (it->second.lockedMaxTSC < tsc)
+				{
+					it->second.lockedMaxTSC = tsc;
+				}
+			}
+			else
+			{
+				it->second.faillockcount++;
+				int64_t tsc = failTSC - beginTSC;
+				it->second.trylockTSC += tsc;
+				if (it->second.trylockMaxTSC < tsc)
+				{
+					it->second.trylockMaxTSC = tsc;
+				}
+			}
+			it->second.spincount += spinCount;
+
+			return; // 直接返回
+		}
+	}
+
+	// 不存在直接用写锁
+	{
+		boost::unique_lock<boost::shared_mutex> lock(mutex);
+		RedisSpinLockData& data = records[key];
+		data.lockcount = 1;
+		if (locked)
+		{
+			int64_t tsc = lockTSC - beginTSC;
+			data.trylockTSC = tsc;
+			data.trylockMaxTSC = tsc;
+			tsc = endTSC - lockTSC;
+			data.lockedTSC = tsc;
+			data.lockedMaxTSC = tsc;
 		}
 		else
 		{
 			data.faillockcount++;
+			int64_t tsc = failTSC - beginTSC;
+			data.trylockTSC = tsc;
+			data.trylockMaxTSC = tsc;
 		}
-		data.spincount += m_spinCount;
+		data.spincount += spinCount;
 	}
 }
 
-thread_local RedisSpinLockRecord g_default_redisspinlockdata;
-bool g_record_redisspinlockdata = false;
-thread_local bool g_record_redisspinlockdata_thread = false;
+RedisSpinLockRecord g_redisspinlockrecord;

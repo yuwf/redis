@@ -49,14 +49,7 @@ protected:
 	int64_t m_lasttsc = 0;	// 用户检查超时
 };
 
-class RedisSyncSubscirbeLocker
-{
-public:
-	RedisSyncSubscirbeLocker(RedisSyncSubscribeLock& subscribe) : m_subscribe(subscribe) {};
 
-protected:
-	RedisSyncSubscribeLock& m_subscribe;
-};
 
 
 #endif

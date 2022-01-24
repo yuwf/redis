@@ -1,7 +1,9 @@
-#ifndef _SPEEDTEST_H_
+ï»¿#ifndef _SPEEDTEST_H_
 #define _SPEEDTEST_H_
 
 #include <unordered_map>
+#include <boost/thread/mutex.hpp>
+#include <atomic>
 
 #if defined(_MSC_VER)
 #include <intrin.h>  
@@ -15,7 +17,7 @@
 #define	FORCE_INLINE inline __attribute__((always_inline))
 #endif
 
-// »ñÈ¡CPUµ±Ç°ÆµÂÊÖµ
+// è·å–CPUå½“å‰é¢‘ç‡å€¼
 FORCE_INLINE int64_t TSC()
 {
 	// rdtsc
@@ -26,27 +28,63 @@ FORCE_INLINE int64_t TSC()
 	//return (int64_t)__rdtscp(&aux);
 }
 
-// »ñÈ¡CPUÎ¢ÃîµÄÆµÂÊ
+// è·å–CPUå¾®å¦™çš„é¢‘ç‡
 extern int64_t TSCPerUS();
 
 struct SpeedTestPosition
 {
-	const char* name = NULL;	// ²âÊÔÎ»ÖÃÃû ÒªÇóÊÇ×ÖÃæ±äÁ¿
-	int index = 0;				// ²âÊÔÎ»ÖÃºÅ
+	const char* name = NULL;	// æµ‹è¯•ä½ç½®å è¦æ±‚æ˜¯å­—é¢å˜é‡
+	int num = 0;				// æµ‹è¯•ä½ç½®å·
 
-	std::size_t hash = 0;		// ¹¹ÔìÊ±Ö±½Ó¼ÆËãºÃhash
+	std::size_t hash = 0;		// æ„é€ æ—¶ç›´æ¥è®¡ç®—å¥½hash
 
-	SpeedTestPosition(const char* _name_, int _index_) : name(_name_), index(_index_)
+	SpeedTestPosition(const char* _name_, int _num_) : name(_name_), num(_num_)
 	{
 		if (_name_)
-			hash = std::hash<std::size_t>()((std::size_t)_name_) + std::hash<int>()(index);
+			hash = std::hash<std::size_t>()((std::size_t)_name_) + std::hash<int>()(num);
 		else
-			hash = std::hash<int>()(index);
+			hash = std::hash<int>()(num);
 	}
 
 	bool operator == (const SpeedTestPosition& other) const
 	{
-		return name == other.name && index == other.index;
+		return name == other.name && num == other.num;
+	}
+};
+
+struct SpeedTestValue
+{
+	SpeedTestValue() {}
+	SpeedTestValue(int times, int64_t tsc, int64_t maxtsc)
+		: calltimes(times), elapsedTSC(tsc), elapsedMaxTSC(maxtsc)
+	{
+	}
+	SpeedTestValue(const SpeedTestValue& other)
+		: calltimes(other.calltimes.load()), elapsedTSC(other.elapsedTSC.load()), elapsedMaxTSC(other.elapsedMaxTSC.load())
+	{
+	}
+
+	std::atomic<int64_t> calltimes = { 0 };		// è°ƒç”¨æ¬¡æ•°
+	std::atomic<int64_t> elapsedTSC = { 0 }; // æ¶ˆè€—CPUå¸§ç‡
+	std::atomic<int64_t> elapsedMaxTSC = { 0 }; // æ¶ˆè€—CPUæœ€å¤§å¸§ç‡
+
+	SpeedTestValue& operator += (const SpeedTestValue& other)
+	{
+		calltimes += other.calltimes;
+		elapsedTSC += other.elapsedTSC;
+		int64_t tsc = other.elapsedMaxTSC.load();
+		if (elapsedMaxTSC < tsc)
+		{
+			elapsedMaxTSC = tsc;
+		}
+		return *this;
+	}
+	SpeedTestValue& operator = (const SpeedTestValue& other)
+	{
+		calltimes = other.calltimes.load();
+		elapsedTSC = other.elapsedTSC.load();
+		elapsedMaxTSC = other.elapsedMaxTSC.load();
+		return *this;
 	}
 };
 
@@ -58,58 +96,60 @@ struct SpeedTestPositionHash
 	}
 };
 
-struct SpeedTestValue
-{
-	int calltimes = 0;		// µ÷ÓÃ´ÎÊı
-	int64_t elapsedTSC = 0; // ÏûºÄCPUÖ¡ÂÊ
-	int64_t elapsedMaxTSC = 0; // ÏûºÄCPU×î´óÖ¡ÂÊ
-
-	SpeedTestValue& operator += (const SpeedTestValue& other)
-	{
-		calltimes += other.calltimes;
-		elapsedTSC += other.elapsedTSC;
-		if (elapsedMaxTSC < other.elapsedMaxTSC)
-		{
-			elapsedMaxTSC = other.elapsedMaxTSC;
-		}
-		return *this;
-	}
-};
-
 typedef std::unordered_map<SpeedTestPosition, SpeedTestValue, SpeedTestPositionHash> SpeedTestPositionMap;
 
-struct SpeedTestData
+class SpeedTestRecord
 {
-	// ×ÜµÄºÄÊ± ĞèÒªÍâ²¿×Ô¼ºÇåÀí
-	SpeedTestPositionMap position;
+public:
+	void Clear(SpeedTestPositionMap& lastdata);
 
-	// µ¥²âÊÔÖµ´óÓÚ¸ÄÖµÊ±Êä³öÈÕÖ¾ Î¢Ãî <=0±íÊ¾²»Ê¹ÓÃÕâ¸öÖµ 
+	// å¿«ç…§æ•°æ®
+	// ã€å‚æ•°metricsprefixå’Œtags ä¸è¦æœ‰ç›¸å…³æ ¼å¼ç¦æ­¢çš„ç‰¹æ®Šå­—ç¬¦ å†…éƒ¨ä¸å¯¹è¿™ä¸¤ä¸ªå‚æ•°åšä»»ä½•æ ¼å¼è½¬åŒ–ã€‘
+	// metricsprefixæŒ‡æ ‡åå‰ç¼€ å†…éƒ¨äº§ç”ŸæŒ‡æ ‡å¦‚ä¸‹
+	// metricsprefix_calltimes è°ƒç”¨æ¬¡æ•°
+	// metricsprefix_elapse è€—æ—¶ å¾®ç§’
+	// metricsprefix_maxelapse æœ€å¤§è€—æ—¶ å¾®ç§’
+	// tagsé¢å¤–æ·»åŠ çš„æ ‡ç­¾ï¼Œ å†…éƒ¨äº§ç”Ÿæ ‡ç­¾ name:æµ‹è¯•åç§° num;æµ‹è¯•å·
+	enum SnapshotType { Json, Influx, Prometheus };
+	std::string Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string, std::string>& tags = std::map<std::string, std::string>());
+
+	void Add(const SpeedTestPosition& testpos, int64_t tsc);
+
+	void SetRecord(bool b) { brecord = b; }
+	void SetLog(int64_t v) { greaterUSLog = v; }
+
+protected:
+	// è®°å½•çš„æµ‹è¯•æ•°æ®
+	boost::shared_mutex mutex;
+	SpeedTestPositionMap records;
+
+	// æ˜¯å¦è®°å½•æµ‹è¯•æ•°æ®
+	bool brecord = true;
+
+	friend class SpeedTest;
+	// å•æµ‹è¯•å€¼å¤§äºæ”¹å€¼æ—¶è¾“å‡ºæ—¥å¿— å¾®å¦™ <=0è¡¨ç¤ºä¸ä½¿ç”¨è¿™ä¸ªå€¼ 
 	int64_t greaterUSLog = 0;
 };
 
 class SpeedTest
 {
 public:
-	// _name_ ²ÎÊı±ØĞëÊÇÒ»¸ö×ÖÃæÁ¿
-	SpeedTest(SpeedTestData& _testdata_, const char* _name_, int _index_);
+	// _name_ å‚æ•°å¿…é¡»æ˜¯ä¸€ä¸ªå­—é¢é‡
+	SpeedTest(const char* _name_, int _index_);
 	~SpeedTest();
 
 protected:
-	int64_t begin_tsc; // CPUÆµÂÊÖµ
-
-	SpeedTestData& testdata;
+	int64_t begin_tsc; // CPUé¢‘ç‡å€¼
 	SpeedTestPosition testpos;
 };
 
-extern thread_local SpeedTestData g_default_speedtestdata;
-extern bool g_record_speedtestdata;						// ÊÇ·ñ¼ÇÂ¼²âÊÔÊı¾İ Ä¬ÈÏ²»¼ÇÂ¼ Õë¶ÔËùÓĞÏß³Ì
-extern thread_local bool g_record_speedtestdata_thread;	// Õë¶Ôµ±Ç°Ïß³Ì Ä¬ÈÏ²»¼ÇÂ¼
+extern SpeedTestRecord g_speedtestrecord;
 
 #define __SpeedTestObjName(line)  speedtestobj_##line
 #define _SpeedTestObjName(line)  __SpeedTestObjName(line)
 #define SpeedTestObjName() _SpeedTestObjName(__LINE__)
 
 #define SeedTestObject() \
-	SpeedTest SpeedTestObjName()(g_default_speedtestdata, __FUNCTION__, __LINE__);
+	SpeedTest SpeedTestObjName()(__FUNCTION__, __LINE__);
 
 #endif

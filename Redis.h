@@ -12,9 +12,12 @@
 #include <sstream>
 #include <boost/any.hpp>
 
-#include "LLog.h"
-#define LogError LLOG_ERROR
-#define LogInfo LLOG_INFO
+// 自己的Log定义
+//#include "LLog.h"
+//#define LogError LLOG_ERROR
+//#define LogInfo LLOG_INFO
+#define LogError 
+#define LogInfo 
 
 struct RedisResult;
 class Redis
