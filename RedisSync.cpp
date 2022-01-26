@@ -10,10 +10,19 @@ static std::list<RedisSync*> s_redissync;
 
 RedisSync::RedisSync(bool subscribe)
 	: m_socket(m_ioservice)
+#if defined(WIN32)
+	, m_context(boost::asio::ssl::context::tlsv1)
+#else
+	, m_context(boost::asio::ssl::context::tlsv12)
+#endif
+	, m_sslsocket(m_ioservice, m_context)
 	, m_subscribe(subscribe)
 {
 	std::lock_guard<std::mutex> lock(s_mutexredissync);
 	s_redissync.push_back(this);
+
+	m_context.set_default_verify_paths();
+	m_context.set_verify_mode(boost::asio::ssl::verify_none);
 }
 
 RedisSync::~RedisSync()
@@ -26,7 +35,7 @@ RedisSync::~RedisSync()
 	}
 }
 
-bool RedisSync::InitRedis(const std::string& host, unsigned short port, const std::string& auth, int index)
+bool RedisSync::InitRedis(const std::string& host, unsigned short port, const std::string& auth, int index, bool bssl)
 {
 	if(host.empty())
 	{
@@ -38,6 +47,7 @@ bool RedisSync::InitRedis(const std::string& host, unsigned short port, const st
 	m_port = port;
 	m_auth = auth;
 	m_index = index;
+	m_bssl = bssl;
 
 	if (!Connect())
 	{
@@ -45,6 +55,7 @@ bool RedisSync::InitRedis(const std::string& host, unsigned short port, const st
 		m_port = 0;
 		m_auth.clear();
 		m_index = 0;
+		m_bssl = false;
 		return false;
 	}
 	return true;
@@ -53,10 +64,18 @@ bool RedisSync::InitRedis(const std::string& host, unsigned short port, const st
 void RedisSync::Close()
 {
 	boost::system::error_code ec;
-	if (m_socket.is_open())
+	boost::asio::ip::tcp::socket& socket = m_bssl ? m_sslsocket.next_layer() : m_socket;
+	if (socket.is_open())
 	{
-		m_socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-		m_socket.close(ec);
+		if (m_bssl)
+		{
+			m_sslsocket.shutdown(ec);
+		}
+		else
+		{
+			m_socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+		}
+		socket.close(ec);
 	}
 	m_bconnected = false;
 	ClearRecvBuff();
@@ -419,11 +438,12 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 		return -1;
 	}
 
+	boost::asio::ip::tcp::socket& socket = m_bssl ? m_sslsocket.next_layer() : m_socket;
 	if (block)
 	{
 		boost::system::error_code ec;
 		bool non_block(false);
-		m_socket.non_blocking(non_block, ec);
+		socket.non_blocking(non_block, ec);
 	}
 
 	RedisResult rst;
@@ -577,7 +597,7 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 	{
 		boost::system::error_code ec;
 		bool non_block(true);
-		m_socket.non_blocking(non_block, ec);
+		socket.non_blocking(non_block, ec);
 	}
 
 	// 收缩下接受数据的buff
@@ -616,15 +636,25 @@ bool RedisSync::Connect()
 	// 支持域名
 	boost::asio::ip::tcp::resolver nresolver(m_ioservice);
 	boost::asio::ip::tcp::resolver::query nquery(m_host, std::to_string(m_port));
-	boost::asio::ip::tcp::resolver::iterator endpoint_iterator = nresolver.resolve(nquery);
+	boost::system::error_code ec;
+	boost::asio::ip::tcp::resolver::iterator it = nresolver.resolve(nquery, ec);
 	boost::asio::ip::tcp::resolver::iterator end_iterator;
-	boost::system::error_code ec = boost::asio::error::host_not_found;
-	while (ec && endpoint_iterator != end_iterator)
+	if (ec || it == end_iterator)
 	{
-		m_socket.open(endpoint_iterator->endpoint().protocol(), ec);
-		if (ec)
+		LogError("RedisSync Valid Redis Address, host=%s port=%d, %s", m_host.c_str(), (int)m_port, ec.message().c_str());
+		return false;
+	}
+
+	boost::asio::ip::tcp::socket& socket = m_bssl ? m_sslsocket.next_layer() : m_socket;
+	boost::asio::ip::address addr;
+	bool bconnect = false;
+	boost::system::error_code connect_ec; // 连接错误
+	while (!bconnect && it != end_iterator)
+	{
+		socket.open(it->endpoint().protocol(), connect_ec);
+		if (connect_ec)
 		{
-			endpoint_iterator++;
+			it++;
 			continue;
 		}
 
@@ -640,30 +670,41 @@ bool RedisSync::Connect()
 
 		int nRet = 0;
 		// 设置超时 连接超时好像一直失败 在linux下没有SO_CONNECT_TIME
-		//nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_CONNECT_TIME, (const char*)&conntimeout, sizeof(conntimeout));
-		nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_SNDTIMEO, (const char*)&sendtimeout, sizeof(sendtimeout));
-		nRet = setsockopt(m_socket.native(), SOL_SOCKET, SO_RCVTIMEO, (const char*)&recvtimeout, sizeof(recvtimeout));
+		//nRet = setsockopt(socket.native(), SOL_SOCKET, SO_CONNECT_TIME, (const char*)&conntimeout, sizeof(conntimeout));
+		nRet = setsockopt(socket.native(), SOL_SOCKET, SO_SNDTIMEO, (const char*)&sendtimeout, sizeof(sendtimeout));
+		nRet = setsockopt(socket.native(), SOL_SOCKET, SO_RCVTIMEO, (const char*)&recvtimeout, sizeof(recvtimeout));
 
-		m_socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
-		m_socket.set_option(boost::asio::socket_base::keep_alive(true), ec);
+		socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
+		socket.set_option(boost::asio::socket_base::keep_alive(true), ec);
 
 		// 默认阻塞
 		bool non_block(false);
-		m_socket.non_blocking(non_block, ec);
+		socket.non_blocking(non_block, ec);
 
-		m_socket.connect(*endpoint_iterator, ec);
-		if (ec)
+		addr = it->endpoint().address();
+		socket.connect(*it, connect_ec);
+		if (connect_ec)
 		{
-			boost::system::error_code ec2;
-			m_socket.close(ec2);
-			endpoint_iterator++;
+			socket.close(ec);
+			it++;
 			continue;
 		}
+		if (m_bssl)
+		{
+			m_sslsocket.handshake(boost::asio::ssl::stream_base::client, connect_ec);
+			if (connect_ec)
+			{
+				socket.close(ec);
+				it++;
+				continue;
+			}
+		}
+		bconnect = true;
 	}
 
-	if (ec)
+	if (!bconnect)
 	{
-		LogError("RedisSync Connect Fail, host=%s port=%d, %s", m_host.c_str(), (int)m_port, ec.message().c_str());
+		LogError("RedisSync Connect Fail, host=%s[%s] port=%d, %s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, connect_ec.message().c_str());
 		return false;
 	}
 
@@ -682,21 +723,21 @@ bool RedisSync::Connect()
 
 		if (!Send(cmd))
 		{
-			m_socket.close(ec);
+			Close();
 			return false;
 		}
 
 		RedisResult rst;
 		if (ReadReply(rst) != 1)
 		{
-			LogError("RedisSync Maybe Not Valid Redis Address, host=%s port=%d", m_host.c_str(), (int)m_port);
-			m_socket.close(ec);
+			LogError("RedisSync Maybe Not Valid Redis Address, host=%s[%s] port=%d", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port);
+			Close();
 			return false;
 		}
 		if (rst.IsNull() || rst.IsError())
 		{
-			LogError("RedisSync Auth Error, %s", m_auth.c_str());
-			m_socket.close(ec);
+			LogError("RedisSync Auth Error, host=%s[%s] port=%d auth=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_auth.c_str());
+			Close();
 			return false;
 		}
 	}
@@ -710,28 +751,28 @@ bool RedisSync::Connect()
 
 		if (!Send(cmd))
 		{
-			m_socket.close(ec);
+			Close();
 			return false;
 		}
 
 		RedisResult rst;
 		if (ReadReply(rst) != 1)
 		{
-			LogError("RedisSync Maybe Not Valid Redis Address, host=%s port=%d", m_host.c_str(), (int)m_port);
-			m_socket.close(ec);
+			LogError("RedisSync Maybe Not Valid Redis Address, host=%s[%s] port=%d", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port);
+			Close();
 			return false;
 		}
 		if (rst.IsNull() || rst.IsError())
 		{
 			LogError("RedisSync Select Error, %d", m_index);
-			m_socket.close(ec);
+			Close();
 			return false;
 		}
 	}
 
 	ClearRecvBuff();
 
-	LogInfo("RedisSync Connect Success, host=%s port=%d index=%d", m_host.c_str(), (int)m_port, m_index);
+	LogInfo("RedisSync Connect Success, host=%s[%s] port=%d index=%d ssl=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_index, m_bssl ? "true" : "false");
 	m_bconnected = true;
 
 	// 重新订阅
@@ -739,7 +780,7 @@ bool RedisSync::Connect()
 	{
 		// 订阅默认不阻塞
 		bool non_block(true);
-		m_socket.non_blocking(non_block, ec);
+		socket.non_blocking(non_block, ec);
 
 		for (auto it = m_channel.begin(); it != m_channel.end(); )
 		{
@@ -801,15 +842,30 @@ bool RedisSync::Send(const RedisCommand& cmd)
 
 	int64_t begin = TSC();
 	boost::system::error_code ec;
-	std::size_t size = boost::asio::write(m_socket, sendbuff.data(), boost::asio::transfer_all(), ec);
-	m_sendbytes += sendbuff.size();
+	std::size_t sendsize = 0;
+	const std::size_t buffsize = sendbuff.size();
+	while (sendsize < buffsize)
+	{
+		std::size_t size = 0;
+		if (m_bssl)
+		{
+			size = m_sslsocket.write_some(sendbuff.data(), ec);
+		}
+		else
+		{
+			size = m_socket.write_some(sendbuff.data(), ec);
+		}
+		if (ec)
+		{
+			LogError("RedisSync Write Error, %s", ec.message().c_str());
+			return false;
+		}
+		sendsize += size;
+		sendbuff.consume(size);
+	}
+	m_sendbytes += sendsize;
 	int64_t end = TSC();
 	m_sendcost += (end - begin) / TSCPerUS();
-	if (ec)
-	{
-		LogError("RedisSync Write Error, %s", ec.message().c_str());
-		return false;
-	}
 	return true;
 }
 
@@ -825,15 +881,30 @@ bool RedisSync::Send(const std::vector<RedisCommand>& cmds)
 
 	int64_t begin = TSC();
 	boost::system::error_code ec;
-	boost::asio::write(m_socket, sendbuff.data(), boost::asio::transfer_all(), ec);
-	m_sendbytes += sendbuff.size();
+	std::size_t sendsize = 0;
+	const std::size_t buffsize = sendbuff.size();
+	while (sendsize < buffsize)
+	{
+		std::size_t size = 0;
+		if (m_bssl)
+		{
+			size = m_sslsocket.write_some(sendbuff.data(), ec);
+		}
+		else
+		{
+			size = m_socket.write_some(sendbuff.data(), ec);
+		}
+		if (ec)
+		{
+			LogError("RedisSync Write Error, %s", ec.message().c_str());
+			return false;
+		}
+		sendsize += size;
+		sendbuff.consume(size);
+	}
+	m_sendbytes += sendsize;
 	int64_t end = TSC();
 	m_sendcost += (end - begin) / TSCPerUS();
-	if (ec)
-	{
-		LogError("RedisSync Write Error, %s", ec.message().c_str());
-		return false;
-	}
 	return true;
 }
 
@@ -859,9 +930,18 @@ int RedisSync::ReadToCRLF(char** buff, int mindatalen)
 		boost::array<char, 512> inbuff;
 		int64_t begin = TSC();
 		boost::system::error_code ec;
-		size_t size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
+		size_t size = 0;
+		if (m_bssl)
+		{
+			size = m_sslsocket.read_some(boost::asio::buffer(inbuff), ec);
+		}
+		else
+		{
+			size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
+		}
 		int64_t end = TSC();
 		m_recvcost += ((end - begin) / TSCPerUS());
+		m_recvbytes += size;
 		if (ec)
 		{
 			if (ec == boost::asio::error::would_block)
@@ -882,7 +962,6 @@ int RedisSync::ReadToCRLF(char** buff, int mindatalen)
 		if (size > 0)
 		{
 			m_recvbuff.insert(m_recvbuff.end(), inbuff.begin(), inbuff.begin() + size);
-			m_recvbytes += size;
 		}
 	} while (true);
 }

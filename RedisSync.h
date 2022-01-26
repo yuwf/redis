@@ -6,6 +6,7 @@
 #include <memory>
 #include <atomic>
 #include <boost/asio.hpp>
+#include <boost/asio/ssl.hpp>
 #include "Redis.h"
 
 // 同步调用，不支持多线程，IO默认是阻塞的
@@ -17,7 +18,7 @@ public:
 	RedisSync(bool subscribe = false);
 	virtual ~RedisSync();
 
-	bool InitRedis(const std::string& host, unsigned short port, const std::string& auth = "", int index = 0);
+	bool InitRedis(const std::string& host, unsigned short port, const std::string& auth = "", int index = 0, bool bssl = false);
 	void Close();
 
 	// 命令样式 "set key 123"
@@ -40,6 +41,7 @@ public:
 	unsigned short Port() const { return m_port; }
 	const std::string& Auth() const { return m_auth; }
 	int Index() const { return m_index; }
+	bool SSL() const { return m_bssl; }
 
 	// 统计使用
 	int64_t Ops() const { return m_ops; }
@@ -109,6 +111,9 @@ protected:
 
 	boost::asio::io_service m_ioservice;
 	boost::asio::ip::tcp::socket m_socket;
+	boost::asio::ssl::context m_context;
+	boost::asio::ssl::stream<boost::asio::ip::tcp::socket> m_sslsocket;
+	
 	bool m_bconnected = false;	// 是否已连接
 
 	// 数据接受buff
@@ -132,6 +137,7 @@ protected:
 	unsigned short m_port = 0;
 	std::string m_auth;
 	int m_index = 0;
+	bool m_bssl = false;
 
 	// 统计使用
 	std::atomic<int64_t> m_ops = { 0 };

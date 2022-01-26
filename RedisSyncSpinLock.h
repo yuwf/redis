@@ -107,12 +107,12 @@ struct RedisSpinLockData
 	}
 };
 
-typedef std::unordered_map<std::string, RedisSpinLockData> RedisSpinLockDataMap;
+typedef std::unordered_map<std::string, RedisSpinLockData*> RedisSpinLockDataMap;
 
 class RedisSpinLockRecord
 {
 public:
-	void Clear(RedisSpinLockDataMap& lastdata);
+	RedisSpinLockData* Reg(const std::string& key);
 
 	// 快照数据
 	// 【参数metricsprefix和tags 不要有相关格式禁止的特殊字符 内部不对这两个参数做任何格式转化】
@@ -127,8 +127,6 @@ public:
 	// tags额外添加的标签，内部产生标签 key:加锁的key名
 	enum SnapshotType { Json, Influx, Prometheus };
 	std::string Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string, std::string>& tags = std::map<std::string, std::string>());
-
-	void Add(const std::string& key, int64_t beginTSC, int64_t endTSC, int64_t lockTSC, int64_t failTSC, int spinCount, bool locked);
 
 	void SetRecord(bool b) { brecord = b; }
 

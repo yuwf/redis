@@ -10,9 +10,9 @@ RedisAsyncThread::~RedisAsyncThread()
 
 }
 
-bool RedisAsyncThread::Init(const std::string& host, unsigned short port, const std::string& auth, int index, std::function< void(std::function< void()>)> dispath)
+bool RedisAsyncThread::Init(const std::string& host, unsigned short port, const std::string& auth, int index, bool bssl, std::function< void(std::function< void()>)> dispath)
 {
-	if (!m_redis.InitRedis(host, port, auth, index))
+	if (!m_redis.InitRedis(host, port, auth, index, bssl))
 	{
 		return false;
 	}

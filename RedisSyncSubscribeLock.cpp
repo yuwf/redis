@@ -18,7 +18,7 @@ RedisSyncSubscribeLock::RedisSyncSubscribeLock(RedisSync& redis)
 
 bool RedisSyncSubscribeLock::Init()
 {
-	if (!m_subscriberedis.InitRedis(m_redis.Host(), m_redis.Port(), m_redis.Auth(), m_redis.Index()))
+	if (!m_subscriberedis.InitRedis(m_redis.Host(), m_redis.Port(), m_redis.Auth(), m_redis.Index(), m_redis.SSL()))
 	{
 		LogError("RedisAsyncLockSubscirbe Init Error");
 		return false;
