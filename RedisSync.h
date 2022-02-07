@@ -49,6 +49,7 @@ public:
 	int64_t RecvBytes() const { return m_recvbytes; }
 	int64_t SendCost() const { return m_sendcost; }
 	int64_t RecvCost() const { return m_recvcost; }
+	int64_t NetIOCost() const { return m_sendcost + m_recvcost; }
 	void ResetOps() { m_ops.store(0); m_sendbytes.store(0); m_recvbytes.store(0); m_sendcost.store(0); m_recvcost.store(0); }
 
 	// 快照数据

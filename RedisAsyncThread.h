@@ -17,7 +17,7 @@ public:
 	virtual ~RedisAsyncThread();
 
 	//初始化Redis
-	bool Init(const std::string& host, unsigned short port, const std::string& auth, int index, bool bssl, std::function<void(std::function< void()>)> dispath);
+	bool Init(const std::string& host, unsigned short port, const std::string& auth, int index, std::function<void(std::function< void()>)> dispath, bool bssl = false);
 	void Stop();
 	void Join();
 
