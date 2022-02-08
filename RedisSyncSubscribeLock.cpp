@@ -5,6 +5,7 @@
 #include <boost/thread.hpp>
 
 #include "RedisSyncSubscribeLock.h"
+#include "Clock.h"
 
 static std::string s_redisasynclockuuid = boost::uuids::to_string(boost::uuids::random_generator()());
 

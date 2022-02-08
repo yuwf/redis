@@ -3,7 +3,7 @@
 #include <mutex>
 #include <boost/array.hpp>
 #include "RedisSync.h"
-#include "SpeedTest.h"
+#include "Clock.h"
 
 static std::mutex s_mutexredissync;
 static std::list<RedisSync*> s_redissync;

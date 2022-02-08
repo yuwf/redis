@@ -7,8 +7,8 @@
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/thread.hpp>
 
-#include "SpeedTest.h"
 #include "RedisSyncSpinLock.h"
+#include "Clock.h"
 
 static std::string s_redisspinlockuuid = boost::uuids::to_string(boost::uuids::random_generator()());
 

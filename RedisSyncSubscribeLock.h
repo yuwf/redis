@@ -7,7 +7,6 @@
 #include <functional>
 #include <thread>
 #include "RedisSync.h"
-#include "SpeedTest.h"
 
 class RedisSyncSubscribeLock
 {

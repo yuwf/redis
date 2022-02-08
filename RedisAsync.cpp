@@ -2,7 +2,7 @@
 #include <stdarg.h>
 #include <boost/array.hpp>
 #include "RedisAsync.h"
-#include "SpeedTest.h"
+#include "Clock.h"
 
 static std::mutex s_mutexredisasync;
 static std::list<RedisAsync*> s_redisasync;
