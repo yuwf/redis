@@ -48,7 +48,7 @@ static void CalcCycles()
 
 int64_t TSCPerS()
 {
-	if (s_CyclesPerSecond < 0)
+	if (s_CyclesPerSecond <= 0)
 	{
 		CalcCycles();
 	}
@@ -57,7 +57,7 @@ int64_t TSCPerS()
 
 int64_t TSCPerMS()
 {
-	if (s_CyclesPreMilliSecond < 0)
+	if (s_CyclesPreMilliSecond <= 0)
 	{
 		CalcCycles();
 	}
@@ -66,7 +66,7 @@ int64_t TSCPerMS()
 
 int64_t TSCPerUS()
 {
-	if (s_CyclesPerMicroSecond < 0)
+	if (s_CyclesPerMicroSecond <= 0)
 	{
 		CalcCycles();
 	}
