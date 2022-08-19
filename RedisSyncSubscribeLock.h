@@ -1,7 +1,7 @@
 ﻿#ifndef _REDISSYNCSUBSCIRBELOCK_H_
 #define _REDISSYNCSUBSCIRBELOCK_H_
 
-// by yuwf qingting.water@gmail.com
+// by git@github.com:yuwf/redis.git
 
 #include <unordered_map>
 #include <functional>

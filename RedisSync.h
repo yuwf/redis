@@ -1,7 +1,7 @@
 ﻿#ifndef _REDISSYNC_H_
 #define _REDISSYNC_H_
 
-// by yuwf qingting.water@gmail.com
+// by git@github.com:yuwf/redis.git
 
 #include <memory>
 #include <atomic>
@@ -54,15 +54,15 @@ public:
 
 	// 快照数据
 	// 【参数metricsprefix和tags 不要有相关格式禁止的特殊字符 内部不对这两个参数做任何格式转化】
-	// metricsprefix指标名前缀 内部产生指标如下
-	// metricsprefix_ops 调用次数
-	// metricsprefix_sendbytes 发送字节数
-	// metricsprefix_recvbytes 接受字节数
-	// metricsprefix_sendcost 发送时间 微秒
-	// metricsprefix_recvcost 接受时间 微秒
+	// metricsprefix指标名前缀 内部产生指标如下，不包括[]
+	//[metricsprefix]redissync_ops 调用次数
+	//[metricsprefix]redissync_sendbytes 发送字节数
+	//[metricsprefix]redissync_recvbytes 接受字节数
+	//[metricsprefix]redissync_sendcost 发送时间 微秒
+	//[metricsprefix]redissync_recvcost 接受时间 微秒
 	// tags额外添加的标签，内部不产生标签
 	enum SnapshotType { Json, Influx, Prometheus };
-	static std::string Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string,std::string>& tags = std::map<std::string, std::string>());
+	static std::string Snapshot(SnapshotType type, const std::string& metricsprefix = "", const std::map<std::string,std::string>& tags = std::map<std::string, std::string>());
 
 	//////////////////////////////////////////////////////////////////////////
 	// 订阅相关，Redis发生了重连会自动重新订阅之前订阅的频道
@@ -155,37 +155,83 @@ private:
 	friend class RedisSyncPipeline;
 
 public:
-	// 辅助类接口==================================================
+	// 辅助类接口 常用命令封装==================================================
 	// 注 ：
 	// 管道开启后 命令会缓存起来 下面的函数都返回-1
 	// 开启订阅后下面的函数直接返回-1
+	// 下面的函数返回值 1表示成功 0表示为空或者命令错误 -1表示者网络错误或者其他错误
+	// 命令参考 http://doc.redisfans.com/ 函数的顺序最好按这个里面的来
 
-	// DEL命令
-	// 返回值表示删除的个数 -1表示网络或者其他错误
+	//////////////////////////////////////////////////////////////////////////
+	// DEL命令 返回值表示删除的个数
 	int Del(const std::string& key);
 	int Del(const std::vector<std::string>& key);
 
+	// DUMP命令
+	int Dump(const std::string& key, std::string& value);
+
 	// EXISTS和命令
-	// 返回1存在 0不存在 -1表示网络或者其他错误
 	int Exists(const std::string& key);
 
 	// 过期相关命令
-	// 返回1成功 0失败 -1表示网络或其他错误
+	// EXPIRE 秒
 	int Expire(const std::string& key, long long value);
+	// EXPIREAT 秒 时间戳
 	int ExpireAt(const std::string& key, long long value);
+	// PEXPIRE 毫秒
 	int PExpire(const std::string& key, long long value);
+	// PEXPIREAT 毫秒 时间戳
 	int PExpireAt(const std::string& key, long long value);
+	// PERSIST
+	int Persist(const std::string& key);
+	// TTL
 	int TTL(const std::string& key, long long& value);
+	// PTTL
 	int PTTL(const std::string& key, long long& value);
 
+	// KEYS命令
+	int Keys(const std::string& pattern, RedisResult& rst);
+	template<class RstList>
+	int Keys(const std::vector<std::string>& keys, RstList& rst)
+	{
+		RedisResult rst_;
+		int r = Keys(keys, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToArray(rst);
+		return 1;
+	}
+
+	// MOVE命令
+	int Move(const std::string& key, int index);
+
+	// RANDOMKEY命令
+	int RandomKey(std::string& key);
+
+	// RENAME命令
+	int Rename(const std::string& key, const std::string& newkey);
+	int RenameNX(const std::string& key, const std::string& newkey);
+
+	// SCAN 命令 返回值已经过滤cursor数据 只有数据部分
+	int Scan(int cursor, const std::string& match, int count, int& rstcursor, RedisResult& rst);
+	template<class RstList>
+	int Scan(int cursor, const std::string& match, int count, int& rstcursor, RstList& rst)
+	{
+		RedisResult rst_;
+		int r = Scan(cursor, match, count, rstcursor, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToArray(rst);
+		return 1;
+	}
+
+	// TYPE命令
+	// value in [none、string、list、set、zset、hash]
+	int Type(const std::string& key, std::string& value);
+
+
 	//////////////////////////////////////////////////////////////////////////
-	// SET命令 
-	// 返回1成功 0不成功 -1表示网络或其他错误
-	// ex(秒) 和 px(毫秒) 只能使用一个，另一个必须有-1, 否则优先使用ex
-	template<class Value>
-	int Set(const std::string& key, const Value& value, unsigned int ex = -1, unsigned int px = -1, bool nx = false);
 	// GET命令
-	// 返回1成功 0不成功 -1表示网络或其他错误
 	int Get(const std::string& key, std::string& value);
 	template<class VALUE>
 	int Get(const std::string& key, VALUE& value)
@@ -198,41 +244,12 @@ public:
 		return r;
 	}
 
-	// MSET命令
-	// 返回1成功 0不成功 -1表示网络或其他错误
-	int MSet(const std::map<std::string, std::string>& kvs);
-	template<class FieldValueMap>
-	int MSet(const FieldValueMap& kvs)
-	{
-		std::map<std::string, std::string> kvs_;
-		for (auto it = kvs.begin(); it != kvs.end(); ++it)
-			kvs_[Redis::to_string(it->first)] = Redis::to_string(it->second);
-		return MSet(kvs_);
-	}
-
-	// MGET命令
-	// 返回1成功 0不成功 -1表示网络或其他错误
-	// 若成功 rst为数组 元素为string或者null
-	int MGet(const std::vector<std::string>& keys, RedisResult& rst);
-	template<class RstList>
-	int MGet(const std::vector<std::string>& keys, RstList& rst)
-	{
-		RedisResult rst_;
-		int r = MGet(keys, rst_);
-		if (r != 1)
-			return r;
-		rst_.ToArray(rst);
-		return 1;
-	}
-
-	// INCR命令
-	// 返回1成功 0不成功 -1表示网络或其他错误 svalue表示成功后的值
+	// INCR命令 svalue表示成功后的值
 	int Incr(const std::string& key, long long& svalue);
 	int Incr(const std::string& key, int& svalue);
 	int Incr(const std::string& key);
 
-	// INCRBY命令
-	// 返回1成功 0不成功 -1表示网络或其他错误 svalue表示成功后的值
+	// INCRBY命令 svalue表示成功后的值
 	int Incrby(const std::string& key, long long value, long long& svalue);
 	int Incrby(const std::string& key, long long value);
 	template<class Value>
@@ -246,145 +263,41 @@ public:
 		return Incrby(key, (long long)value);
 	}
 
-	// HSET命令
-	// 返回1成功 0不成功 -1表示网络或其他错误
-	int HSet(const std::string& key, const std::string& field, const std::string& value);
-	template<class Field, class Value>
-	int HSet(const std::string& key, const Field& field, const Value& value)
+	// MGET命令 若成功 rst为数组 元素为string或者null
+	int MGet(const std::vector<std::string>& keys, RedisResult& rst);
+	template<class RstList>
+	int MGet(const std::vector<std::string>& keys, RstList& rst)
 	{
-		return HSet(key, Redis::to_string(field), Redis::to_string(value));
-	}
-
-	// HGET命令
-	// 返回1成功 0不成功 -1表示网络或其他错误
-	int HGet(const std::string& key, const std::string& field, std::string& value);
-	template<class Field, class Value>
-	int HGet(const std::string& key, const Field& field, Value& value)
-	{
-		std::string rst;
-		int r = HGet(key, Redis::to_string(field), rst);
+		RedisResult rst_;
+		int r = MGet(keys, rst_);
 		if (r != 1)
 			return r;
-		Redis::string_to(rst, value);
-		return r;
+		rst_.ToArray(rst);
+		return 1;
 	}
 
-	// HMSET命令
-	// 返回1成功 0不成功 -1表示网络或其他错误
-	int HMSet(const std::string& key, const std::map<std::string, std::string>& kvs);
+	// MSET命令
+	int MSet(const std::map<std::string, std::string>& kvs);
 	template<class FieldValueMap>
-	int HMSet(const std::string& key, const FieldValueMap& kvs)
+	int MSet(const FieldValueMap& kvs)
 	{
 		std::map<std::string, std::string> kvs_;
 		for (auto it = kvs.begin(); it != kvs.end(); ++it)
 			kvs_[Redis::to_string(it->first)] = Redis::to_string(it->second);
-		return HMSet(key, kvs_);
+		return MSet(kvs_);
 	}
 
-	// HMGET命令
-	// 返回1成功 0不成功 - 1表示网络或其他错误
-	// 若成功 rst为数组 元素为string或者null
-	int HMGet(const std::string& key, const std::vector<std::string>& fields, RedisResult& rst);
-	template<class FieldList, class RstList>
-	int HMGet(const std::string& key, const FieldList& fields, RstList& rst)
+	// SET命令 
+	// ex(秒) 和 px(毫秒) 只能使用一个，另一个必须有-1, 否则优先使用ex
+	int Set(const std::string& key, const std::string& value, unsigned int ex = -1, unsigned int px = -1, bool nx = false);
+	template<class Value>
+	int Set(const std::string& key, const Value& value, unsigned int ex = -1, unsigned int px = -1, bool nx = false)
 	{
-		std::vector<std::string> fields_;
-		fields_.reserve(fields.size());
-		for (auto it = fields.begin(); it != fields.end(); ++it)
-			fields_.emplace_back(Redis::to_string(*it));
-		RedisResult rst_;
-		int r = HMGet(key, fields_, rst_);
-		if (r != 1)
-			return r;
-		rst_.ToArray(rst);
-		return 1;
+		return Set(key, Redis::to_string(value), ex, px, nx);
 	}
 
-	// HKEYS命令
-	// 返回1成功 0不成功 - 1表示网络或其他错误
-	// 若成功 rst为数组 元素为string
-	int HKeys(const std::string& key, RedisResult& rst); // string数组
-	template<class RstList>
-	int HKeys(const std::string& key, RstList& rst)
-	{
-		RedisResult rst_;
-		int r = HKeys(key, rst_);
-		if (r != 1)
-			return r;
-		rst_.ToArray(rst);
-		return 1;
-	}
-
-	// HVALS命令
-	// 返回1成功 0不成功 - 1表示网络或其他错误
-	// 若成功 rst为数组 元素为string
-	int HVals(const std::string& key, RedisResult& rst); // string数组
-	template<class RstList>
-	int HVals(const std::string& key, RstList& rst)
-	{
-		RedisResult rst_;
-		int r = HKeys(key, rst_);
-		if (r != 1)
-			return r;
-		rst_.ToArray(rst);
-		return 1;
-	}
-
-	// HGETALL命令
-	// 返回1成功 0不成功 - 1表示网络或其他错误
-	// 若成功 rst为数组 元素为string或者null
-	int HGetAll(const std::string& key, RedisResult& rst);
-	template<class FieldValueMap>
-	int HGetAll(const std::string& key, FieldValueMap& rst)
-	{
-		RedisResult rst_;
-		int r = HGetAll(key, rst_);
-		if (r != 1)
-			return r;
-		rst_.ToMap(rst);
-		return 1;
-	}
-
-	// HINCRBY命令
-	// 返回1成功 0不成功 -1表示网络或其他错误 svalue表示成功后的值
-	int HIncrby(const std::string& key, const std::string& field, long long value, long long& svalue);
-	int HIncrby(const std::string& key, const std::string& field, long long value);
-	template<class Field, class Value>
-	int HIncrby(const std::string& key, const Field& field, Value value, long long& svalue)
-	{
-		return HIncrby(key, Redis::to_string(field), (long long)value, svalue);
-	}
-	template<class Field, class Value>
-	int HIncrby(const std::string& key, const Field& field, Value value)
-	{
-		return HIncrby(key, Redis::to_string(field), (long long)value);
-	}
-	
-	// HLEN命令
-	// 返回列表长度 0不成功 -1表示网络或其他错误
-	int HLen(const std::string& key);
-
-	// HSCAN
-	// 返回1成功 0不成功 -1表示网络或其他错误
-	// 返回值已经过滤cursor数据 只有数据部分
-	int HScan(const std::string& key, int cursor, const std::string& match, int count, int& rstcursor, RedisResult& rst);
-	template<class FieldValueMap>
-	int HScan(const std::string& key, int cursor, const std::string& match, int count, int& rstcursor, FieldValueMap& rst)
-	{
-		RedisResult rst_;
-		int r = HScan(key, cursor, match, count, rstcursor, rst_);
-		if (r != 1)
-			return r;
-		rst_.ToMap(rst);
-		return 1;
-	}
-
-	// HEXISTS命令
-	// 返回1存在 0不存在 -1表示网络或其他错误
-	int HExists(const std::string& key, const std::string& field);
-
-	// HEDL命令
-	// 返回值表示删除的个数 -1表示网络或其他错误
+	//////////////////////////////////////////////////////////////////////////
+	// HEDL命令 返回值表示删除的个数
 	int HDel(const std::string& key, const std::string& field);
 	int HDels(const std::string& key, const std::vector<std::string>& fields);
 	template<class Field>
@@ -402,8 +315,146 @@ public:
 		return HDels(key, fields_);
 	}
 
-	// LPUSH命令
-	// 成功返回列表长度 0不成功 -1表示网络或其他错误
+	// HEXISTS命令
+	int HExists(const std::string& key, const std::string& field);
+
+	// HSET命令
+	int HSet(const std::string& key, const std::string& field, const std::string& value);
+	template<class Field, class Value>
+	int HSet(const std::string& key, const Field& field, const Value& value)
+	{
+		return HSet(key, Redis::to_string(field), Redis::to_string(value));
+	}
+
+	// HGET命令
+	int HGet(const std::string& key, const std::string& field, std::string& value);
+	template<class Field, class Value>
+	int HGet(const std::string& key, const Field& field, Value& value)
+	{
+		std::string rst;
+		int r = HGet(key, Redis::to_string(field), rst);
+		if (r != 1)
+			return r;
+		Redis::string_to(rst, value);
+		return r;
+	}
+
+	// HMSET命令
+	int HMSet(const std::string& key, const std::map<std::string, std::string>& kvs);
+	template<class FieldValueMap>
+	int HMSet(const std::string& key, const FieldValueMap& kvs)
+	{
+		std::map<std::string, std::string> kvs_;
+		for (auto it = kvs.begin(); it != kvs.end(); ++it)
+			kvs_[Redis::to_string(it->first)] = Redis::to_string(it->second);
+		return HMSet(key, kvs_);
+	}
+
+	// HMGET命令 若成功 rst为数组 元素为string或者null
+	int HMGet(const std::string& key, const std::vector<std::string>& fields, RedisResult& rst);
+	template<class FieldList, class RstList>
+	int HMGet(const std::string& key, const FieldList& fields, RstList& rst)
+	{
+		std::vector<std::string> fields_;
+		fields_.reserve(fields.size());
+		for (auto it = fields.begin(); it != fields.end(); ++it)
+			fields_.emplace_back(Redis::to_string(*it));
+		RedisResult rst_;
+		int r = HMGet(key, fields_, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToArray(rst);
+		return 1;
+	}
+
+	// HKEYS命令 若成功 rst为数组 元素为string
+	int HKeys(const std::string& key, RedisResult& rst); // string数组
+	template<class RstList>
+	int HKeys(const std::string& key, RstList& rst)
+	{
+		RedisResult rst_;
+		int r = HKeys(key, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToArray(rst);
+		return 1;
+	}
+
+	// HVALS命令 若成功 rst为数组 元素为string
+	int HVals(const std::string& key, RedisResult& rst); // string数组
+	template<class RstList>
+	int HVals(const std::string& key, RstList& rst)
+	{
+		RedisResult rst_;
+		int r = HVals(key, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToArray(rst);
+		return 1;
+	}
+
+	// HGETALL命令 若成功 rst为数组 元素为string或者null
+	int HGetAll(const std::string& key, RedisResult& rst);
+	template<class FieldValueMap>
+	int HGetAll(const std::string& key, FieldValueMap& rst)
+	{
+		RedisResult rst_;
+		int r = HGetAll(key, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToMap(rst);
+		return 1;
+	}
+
+	// HINCRBY命令 svalue表示成功后的值
+	int HIncrby(const std::string& key, const std::string& field, long long value, long long& svalue);
+	int HIncrby(const std::string& key, const std::string& field, long long value);
+	template<class Field, class Value>
+	int HIncrby(const std::string& key, const Field& field, Value value, long long& svalue)
+	{
+		return HIncrby(key, Redis::to_string(field), (long long)value, svalue);
+	}
+	template<class Field, class Value>
+	int HIncrby(const std::string& key, const Field& field, Value value)
+	{
+		return HIncrby(key, Redis::to_string(field), (long long)value);
+	}
+	
+	// HLEN命令
+	int HLen(const std::string& key);
+
+	// HSCAN 返回值已经过滤cursor数据 只有数据部分
+	int HScan(const std::string& key, int cursor, const std::string& match, int count, int& rstcursor, RedisResult& rst);
+	template<class FieldValueMap>
+	int HScan(const std::string& key, int cursor, const std::string& match, int count, int& rstcursor, FieldValueMap& rst)
+	{
+		RedisResult rst_;
+		int r = HScan(key, cursor, match, count, rstcursor, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToMap(rst);
+		return 1;
+	}
+
+	//////////////////////////////////////////////////////////////////////////
+	// LLEN命令 成功返回列表长度
+	int LLen(const std::string& key);
+
+	// LPOP命令 value表示移除的元素
+	int LPop(const std::string& key);
+	int LPop(const std::string& key, std::string& value);
+	template<class Value>
+	int LPop(const std::string& key, Value& value)
+	{
+		std::string rst;
+		int r = LPop(key, rst);
+		if (r != 1)
+			return r;
+		Redis::string_to(rst, value);
+		return r;
+	}
+
+	// LPUSH命令 成功返回列表长度
 	int LPush(const std::string& key, const std::string& value);
 	int LPushs(const std::string& key, const std::vector<std::string>& values);
 	template<class Value>
@@ -421,8 +472,45 @@ public:
 		return LPushs(key, values_);
 	}
 
-	// RPUSH命令
-	// 成功返回列表长度 0不成功 -1表示网络或其他错误
+	// LRANGE命令
+	int LRange(const std::string& key, int start, int stop, RedisResult& rst);
+	template<class ValueList>
+	int LRange(const std::string& key, int start, int stop, ValueList& rst)
+	{
+		RedisResult rst_;
+		int r = LRange(key, start, stop, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToArray(rst);
+		return r;
+	}
+
+	// LREM命令 成功返回移除元素的个数
+	int LRem(const std::string& key, int count, const std::string& value);
+	template<class Value>
+	int LRem(const std::string& key, int count, const Value& value)
+	{
+		return LRem(key, count, Redis::to_string(value));
+	}
+
+	// LTRIM命令
+	int LTrim(const std::string& key, int start, int stop);
+
+	// RPOP命令 value表示移除的元素
+	int RPop(const std::string& key);
+	int RPop(const std::string& key, std::string& value);
+	template<class Value>
+	int RPop(const std::string& key, Value& value)
+	{
+		std::string rst;
+		int r = RPop(key, rst);
+		if (r != 1)
+			return r;
+		Redis::string_to(rst, value);
+		return r;
+	}
+
+	// RPUSH命令 成功返回列表长度
 	int RPush(const std::string& key, const std::string& value);
 	int RPushs(const std::string& key, const std::vector<std::string>& values);
 	template<class Value>
@@ -440,79 +528,91 @@ public:
 		return RPushs(key, values_);
 	}
 
-	// LPOP命令
-	// 1成功 0不成功 -1表示网络或其他错误
-	// value表示移除的元素
-	int LPop(const std::string& key);
-	int LPop(const std::string& key, std::string& value);
-	template<class Value>
-	int LPop(const std::string& key, Value& value)
-	{
-		std::string rst;
-		int r = LPop(key, rst);
-		if (r != 1)
-			return r;
-		Redis::string_to(rst, value);
-		return r;
-	}
-
-	// RPOP命令
-	// 1成功 0不成功 -1表示网络或其他错误
-	// value表示移除的元素
-	int RPop(const std::string& key);
-	int RPop(const std::string& key, std::string& value);
-	template<class Value>
-	int RPop(const std::string& key, Value& value)
-	{
-		std::string rst;
-		int r = RPop(key, rst);
-		if (r != 1)
-			return r;
-		Redis::string_to(rst, value);
-		return r;
-	}
-
-	// LRANGE命令
-	// 1成功 0不成功 -1表示网络或其他错误
-	// 若成功 rst为数组 元素为string
-	int LRange(const std::string& key, int start, int stop, RedisResult& rst);
-	template<class ValueList>
-	int LRange(const std::string& key, int start, int stop, ValueList& rst)
-	{
-		RedisResult rst_;
-		int r = LRange(key, start, stop, rst_);
-		if (r != 1)
-			return r;
-		rst_.ToArray(rst);
-		return r;
-	}
-
-	// LREM命令
-	// 成功返回移除元素的个数 0不成功 -1表示网络或其他错误
-	// 若成功 rst为数组 元素为string
-	int LRem(const std::string& key, int count, std::string& value);
-
-	// LTRIM命令
-	// 返回1成功 0不成功 -1表示网络或其他错误
-	int LTrim(const std::string& key, int start, int stop);
-
-	// LLEN命令
-	// 返回列表长度 0元素为空或者不成功 -1表示网络或其他错误
-	int LLen(const std::string& key);
 
 	//////////////////////////////////////////////////////////////////////////
 	// SADD命令
-	// 成功返回添加的数量 0不成功 -1表示网络或其他错误
 	template<class Value>
 	int SAdd(const std::string& key, const Value& value);
 	template<class ValueList>
 	int SAdds(const std::string& key, const ValueList& values);
-	// SCARD命令
-	// 返回集合长度 0元素为空或者不成功 -1表示网络或其他错误
+
+	// SCARD命令 成功后返回集合长度
 	int SCard(const std::string& key);
 
-	// SREM命令
-	// 成功返回移除元素的数量 0不成功 -1表示网络或其他错误
+	// SDIFF命令
+	int SDiff(const std::vector<std::string>& keys, RedisResult& rst);
+	template<class ValueList>
+	int SDiff(const std::vector<std::string>& keys, ValueList& rst)
+	{
+		RedisResult rst_;
+		int r = SDiff(keys, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToArray(rst);
+		return 1;
+	}
+
+	// SINTER命令
+	int Sinter(const std::vector<std::string>& keys, RedisResult& rst);
+	template<class ValueList>
+	int Sinter(const std::vector<std::string>& keys, ValueList& rst)
+	{
+		RedisResult rst_;
+		int r = Sinter(keys, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToArray(rst);
+		return 1;
+	}
+
+	// 	SISMEMBER命令
+	int SISMember(const std::string& key, const std::string& value);
+	template<class Value>
+	int SISMember(const std::string& key, const Value& value)
+	{
+		return SISMember(key, Redis::to_string(value));
+	}
+
+	// SMEMBERS命令 若成功 rst为数组 元素为string
+	int SMembers(const std::string& key, RedisResult& rst);
+	template<class ValueList>
+	int SMembers(const std::string& key, ValueList& rst)
+	{
+		RedisResult rst_;
+		int r = SMembers(key, rst_);
+		if (r != 1)
+			return r;
+		rst_.ToArray(rst);
+		return 1;
+	}
+
+	// SPOP命令
+	int SPop(const std::string& key, std::string& value);
+	template<class VALUE>
+	int SPop(const std::string& key, VALUE& value)
+	{
+		std::string rst;
+		int r = SPop(key, rst);
+		if (r != 1)
+			return r;
+		Redis::string_to(rst, value);
+		return r;
+	}
+
+	// SRANDMEMBER命令
+	int SRandMember(const std::string& key, std::string& value);
+	template<class VALUE>
+	int SRandMember(const std::string& key, VALUE& value)
+	{
+		std::string rst;
+		int r = SRandMember(key, rst);
+		if (r != 1)
+			return r;
+		Redis::string_to(rst, value);
+		return r;
+	}
+
+	// SREM命令 成功返回移除元素的数量
 	int SRem(const std::string& key, const std::string& value);
 	int SRems(const std::string& key, const std::vector<std::string>& values);
 	template<class Value>
@@ -530,108 +630,36 @@ public:
 		return SRems(key, values_);
 	}
 
-	// SINTER命令
-	// 1成功 0不成功 -1表示网络或其他错误
-	int Sinter(const std::vector<std::string>& keys, RedisResult& rst);
+	// SUNION命令
+	int SUnion(const std::vector<std::string>& keys, RedisResult& rst);
 	template<class ValueList>
-	int Sinter(const std::vector<std::string>& keys, ValueList& rst)
+	int SUnion(const std::vector<std::string>& keys, ValueList& rst)
 	{
 		RedisResult rst_;
-		int r = Sinter(keys, rst_);
+		int r = SUnion(keys, rst_);
 		if (r != 1)
 			return r;
 		rst_.ToArray(rst);
 		return 1;
 	}
 
-	// SMEMBERS命令
-	// 1成功 0不成功 -1表示网络或其他错误
-	// 若成功 rst为数组 元素为string
-	int SMembers(const std::string& key, RedisResult& rst);
-	template<class ValueList>
-	int SMembers(const std::string& key, ValueList& rst)
-	{
-		RedisResult rst_;
-		int r = SMembers(key, rst_);
-		if (r != 1)
-			return r;
-		rst_.ToArray(rst);
-		return 1;
-	}
-
-	// 	SISMEMBER命令
-	// 返回1存在 0不存在 -1表示网络或其他错误
-	int SISMember(const std::string& key, const std::string& value);
-	template<class Value>
-	int SISMember(const std::string& key, const Value& value)
-	{
-		return SISMember(key, Redis::to_string(value));
-	}
 
 	//////////////////////////////////////////////////////////////////////////
 	// EVAL命令
-	// 1成功 0不成功 -1表示网络或其他错误
 	int Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args);
 	int Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst);
 	// EVALSHA命令
-	// 1成功 0不成功 -1表示网络或其他错误
 	int Evalsha(const std::string& scriptsha1, const std::vector<std::string>& keys, const std::vector<std::string>& args);
 	int Evalsha(const std::string& scriptsha1, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst);
 	// SCRIPT EXISTS命令
-	// 返回1存在 0不存在 -1表示网络或者其他错误
 	int ScriptExists(const std::string& scriptsha1);
 	// SCRIPT FLUSH命令
-	// 返回1成功 0不成功 -1表示网络或其他错误
 	int ScriptFlush();
 	// SCRIPT KILL命令
-	// 返回1成功 0不成功 -1表示网络或其他错误
 	int ScriptKill();
 	// SCRIPT LOAD命令
-	// 1成功 0不成功 -1表示网络或其他错误
 	int ScriptLoad(const std::string& script, std::string& scriptsha1);
 };
-
-template<class Value>
-int RedisSync::Set(const std::string& key, const Value& value, unsigned int ex, unsigned int px, bool nx)
-{
-	RedisCommand cmd;
-	cmd.Add("SET");
-	cmd.Add(key);
-	cmd.Add(Redis::to_string(value));
-	if (ex != -1)
-	{
-		cmd.Add("EX");
-		cmd.Add(ex);
-	}
-	else if (px != -1)
-	{
-		cmd.Add("PX");
-		cmd.Add(px);
-	}
-	if (nx)
-	{
-		cmd.Add("NX");
-	}
-
-	// 如果 key 已经存储其他值， SET 就覆写旧值，且无视类型
-	// 返回OK 或者nil
-	RedisResult rst;
-	if (!DoCommand(cmd, rst))
-	{
-		return -1;
-	}
-	if (rst.IsError())
-	{
-		// 命令错误
-		return -1;
-	}
-	if (rst.IsNull())
-	{
-		// 未设置成功
-		return 0;
-	}
-	return 1;
-}
 
 template<class Value>
 int RedisSync::SAdd(const std::string& key, const Value& value)
@@ -646,8 +674,9 @@ int RedisSync::SAdd(const std::string& key, const Value& value)
 	{
 		return -1;
 	}
-	if (rst.IsError())
+	if (rst.IsError() || rst.IsNull())
 	{
+		// 命令错误或者结果为空
 		return 0;
 	}
 	if (rst.IsInt())
@@ -655,7 +684,7 @@ int RedisSync::SAdd(const std::string& key, const Value& value)
 		return rst.ToInt();
 	}
 	LogError("UnKnown Error");
-	return 0;
+	return -1;
 }
 
 template<class ValueList>
@@ -674,8 +703,9 @@ int RedisSync::SAdds(const std::string& key, const ValueList& values)
 	{
 		return -1;
 	}
-	if (rst.IsError())
+	if (rst.IsError() || rst.IsNull())
 	{
+		// 命令错误或者结果为空
 		return 0;
 	}
 	if (rst.IsInt())
@@ -683,7 +713,7 @@ int RedisSync::SAdds(const std::string& key, const ValueList& values)
 		return rst.ToInt();
 	}
 	LogError("UnKnown Error");
-	return 0;
+	return -1;
 }
 
 #endif

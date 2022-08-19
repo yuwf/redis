@@ -1,7 +1,7 @@
 ﻿#ifndef _REDISASYNCTHREAD_H_
 #define _REDISASYNCTHREAD_H_
 
-// by yuwf qingting.water@gmail.com
+// by git@github.com:yuwf/redis.git
 
 #include "RedisAsync.h"
 #include<condition_variable>

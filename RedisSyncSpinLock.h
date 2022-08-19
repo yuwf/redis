@@ -1,7 +1,7 @@
 ﻿#ifndef _REDISSYNCSPINLOCK_H_
 #define _REDISSYNCSPINLOCK_H_
 
-// by yuwf qingting.water@gmail.com
+// by git@github.com:yuwf/redis.git
 
 #include <unordered_map>
 #include <shared_mutex>
@@ -117,16 +117,16 @@ public:
 	// 快照数据
 	// 【参数metricsprefix和tags 不要有相关格式禁止的特殊字符 内部不对这两个参数做任何格式转化】
 	// metricsprefix指标名前缀 内部产生指标如下
-	// metricsprefix_lockcount 加锁次数
-	// metricsprefix_faillockcount 失败次数
-	// metricsprefix_trylock 尝试加锁的时间 微秒
-	// metricsprefix_maxtrylock 尝试加锁的最大时间 微秒
-	// metricsprefix_locked 加锁的时间 微秒
-	// metricsprefix_maxlocked 加锁的最大时间 微秒
-	// metricsprefix_spincount 加锁时自旋的次数
+	// [metricsprefix]redissyncspinlock_lockcount 加锁次数
+	// [metricsprefix]redissyncspinlock_faillockcount 失败次数
+	// [metricsprefix]redissyncspinlock_trylock 尝试加锁的时间 微秒
+	// [metricsprefix]redissyncspinlock_maxtrylock 尝试加锁的最大时间 微秒
+	// [metricsprefix]redissyncspinlock_locked 加锁的时间 微秒
+	// [metricsprefix]redissyncspinlock_maxlocked 加锁的最大时间 微秒
+	// [metricsprefix]redissyncspinlock_spincount 加锁时自旋的次数
 	// tags额外添加的标签，内部产生标签 key:加锁的key名
 	enum SnapshotType { Json, Influx, Prometheus };
-	std::string Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string, std::string>& tags = std::map<std::string, std::string>());
+	std::string Snapshot(SnapshotType type, const std::string& metricsprefix = "", const std::map<std::string, std::string>& tags = std::map<std::string, std::string>());
 
 	void SetRecord(bool b) { brecord = b; }
 

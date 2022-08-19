@@ -1,7 +1,7 @@
 ﻿#ifndef _REDIS_H_
 #define _REDIS_H_
 
-// by yuwf qingting.water@gmail.com
+// by git@github.com:yuwf/redis.git
 
 #include <set>
 #include <string>
@@ -145,6 +145,9 @@ struct RedisCommand
 	// 参数为 "set key 123" 样式
 	void FromString(const std::string& cmd);
 
+	// 转化为 "set key 123" 样式
+	std::string ToString() const;
+
 	// 命令按照Redis协议格式写入到stream中
 	template<class Stream>
 	void ToStream(Stream &stream) const
@@ -283,6 +286,34 @@ public:
 				MapType& v2 = v.back();
 				it->ToMap(v2);
 			}
+		};
+	}
+	template<class ListType>
+	void ScanBindList(int& cursor, ListType& v)
+	{
+		callback = [&](const RedisResult& rst)
+		{
+			if (!rst.IsArray())
+				return;
+			const RedisResult::Array& ar = rst.ToArray();
+			if (ar.size() != 2)
+				return;
+			cursor = ar[0].ToInt();
+			ar[1].ToArray(v);
+		};
+	}
+	template<class MapType>
+	void ScanBindMap(int& cursor, MapType& v)
+	{
+		callback = [&](const RedisResult& rst)
+		{
+			if (!rst.IsArray())
+				return;
+			const RedisResult::Array& ar = rst.ToArray();
+			if (ar.size() != 2)
+				return;
+			cursor = ar[0].ToInt();
+			ar[1].ToMap(v);
 		};
 	}
 

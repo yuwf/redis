@@ -1,7 +1,7 @@
 ﻿#ifndef _REDISASYNC_H_
 #define _REDISASYNC_H_
 
-// by yuwf qingting.water@gmail.com
+// by git@github.com:yuwf/redis.git
 
 #include <memory>
 #include <atomic>
@@ -97,14 +97,14 @@ public:
 	// 快照数据
 	// 【参数metricsprefix和tags 不要有相关格式禁止的特殊字符 内部不对这两个参数做任何格式转化】
 	// metricsprefix指标名前缀 内部产生指标如下
-	// metricsprefix_ops 调用次数
-	// metricsprefix_sendbytes 发送字节数
-	// metricsprefix_recvbytes 接受字节数
-	// metricsprefix_sendcost 发送时间 微秒
-	// metricsprefix_recvcost 接受时间 微秒
+	// [metricsprefix]redisasync_ops 调用次数
+	// [metricsprefix]redisasync_sendbytes 发送字节数
+	// [metricsprefix]redisasync_recvbytes 接受字节数
+	// [metricsprefix]redisasync_sendcost 发送时间 微秒
+	// [metricsprefix]redisasync_recvcost 接受时间 微秒
 	// tags额外添加的标签，内部不产生标签
 	enum SnapshotType { Json, Influx, Prometheus };
-	static std::string Snapshot(SnapshotType type, const std::string& metricsprefix, const std::map<std::string, std::string>& tags = std::map<std::string, std::string>());
+	static std::string Snapshot(SnapshotType type, const std::string& metricsprefix = "", const std::map<std::string, std::string>& tags = std::map<std::string, std::string>());
 
 protected:
 	bool Connect();

@@ -178,6 +178,16 @@ void RedisCommand::FromString(const std::string& cmd)
 	}
 }
 
+std::string RedisCommand::ToString() const
+{
+	std::stringstream ss;
+	for (size_t i = 0; i < buff.size(); ++i)
+	{
+		ss << (i == 0 ? "" : " ") << buff[i];
+	}
+	return std::move(ss.str());
+}
+
 bool RedisResult::IsError() const
 {
 	return error;

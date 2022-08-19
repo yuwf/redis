@@ -10,9 +10,9 @@ static std::list<RedisAsync*> s_redisasync;
 RedisAsync::RedisAsync(bool subscribe)
 	: m_socket(m_ioservice)
 #if defined(WIN32)
-	, m_context(boost::asio::ssl::context::tlsv1)
+	, m_context(boost::asio::ssl::context::sslv23_client)
 #else
-	, m_context(boost::asio::ssl::context::tlsv12)
+	, m_context(boost::asio::ssl::context::tlsv12_client)
 #endif
 	, m_sslsocket(m_ioservice, m_context)
 	, m_subscribe(subscribe)
@@ -225,6 +225,10 @@ void RedisAsync::UpdateReply()
 		cmdptr->rst.emplace_back(rst);
 		if (cmdptr->type == 0)
 		{
+			if (rst.IsError() && cmdptr->cmd.size() > 0)
+			{
+				LogError("RedisAsync err=%s cmd=%s", cmdptr->rst[0].ToString().c_str(), cmdptr->cmd[0].ToString().c_str());
+			}
 			m_queuecommands.pop_front(); // 先移除 回调中可能会修改m_commands
 			if (m_globalcallback)
 			{
@@ -237,6 +241,11 @@ void RedisAsync::UpdateReply()
 		}
 		else if (cmdptr->type == 1)
 		{
+			size_t index = cmdptr->rst.size() - 1;
+			if (rst.IsError() && cmdptr->cmd.size() > index)
+			{
+				LogError("RedisAsync err=%s cmd=%s", cmdptr->rst[index].ToString().c_str(), cmdptr->cmd[index].ToString().c_str());
+			}
 			if (cmdptr->cmd.size() == cmdptr->rst.size())
 			{
 				m_queuecommands.pop_front(); // 先移除
@@ -578,20 +587,26 @@ std::string RedisAsync::Snapshot(SnapshotType type, const std::string& metricspr
 		}
 	}
 
+	static const int metirs_num = 5;
+	static const char* metirs[metirs_num] = { "redisasync_ops", "redisasync_sendbytes", "redisasync_recvbytes", "redisasync_sendcost", "redisasync_recvcost" };
+	int64_t value[metirs_num] = { ops, sendbytes, recvbytes, sendcost, recvcost };
+
 	std::ostringstream ss;
 	if (type == Json)
 	{
-		ss << "{";
-		for (const auto& it : tags)
+		ss << "[";
+		for (int i = 0; i < 5; ++i)
 		{
-			ss << "\"" << it.first << "\":\"" << it.second << "\",";
+			ss << (i == 0 ? "{" : ",{");
+			ss << "\"metrics\":\"" << metricsprefix << metirs[i] << "\",";
+			for (const auto& it : tags)
+			{
+				ss << "\"" << it.first << "\":\"" << it.second << "\",";
+			}
+			ss << "\"value\":" << value[i] << "";
+			ss << "}";
 		}
-		ss << "\"" << metricsprefix << "_ops\":" << ops << ",";
-		ss << "\"" << metricsprefix << "_sendbytes\":" << sendbytes << ",";
-		ss << "\"" << metricsprefix << "_recvbytes\":" << recvbytes << ",";
-		ss << "\"" << metricsprefix << "_sendcost\":" << sendcost << ",";
-		ss << "\"" << metricsprefix << "_recvcost\":" << recvcost;
-		ss << "}";
+		ss << "]";
 	}
 	else if (type == Influx)
 	{
@@ -600,11 +615,10 @@ std::string RedisAsync::Snapshot(SnapshotType type, const std::string& metricspr
 		{
 			tag += ("," + it.first + "=" + it.second);
 		}
-		ss << metricsprefix << "_ops" << tag << " value=" << ops << "i\n";
-		ss << metricsprefix << "_sendbytes" << tag << " value=" << sendbytes << "i\n";
-		ss << metricsprefix << "_recvbytes" << tag << " value=" << recvbytes << "i\n";
-		ss << metricsprefix << "_sendcost" << tag << " value=" << sendcost << "i\n";
-		ss << metricsprefix << "_recvcost" << tag << " value=" << recvcost << "i\n";
+		for (int i = 0; i < metirs_num; ++i)
+		{
+			ss << metricsprefix << metirs[i] << tag << " value=" << value[i] << "i\n";
+		}
 	}
 	else if (type == Prometheus)
 	{
@@ -620,11 +634,10 @@ std::string RedisAsync::Snapshot(SnapshotType type, const std::string& metricspr
 			}
 			tag += "}";
 		}
-		ss << metricsprefix << "_ops" << tag << " " << ops << "\n";
-		ss << metricsprefix << "_sendbytes" << tag << " " << sendbytes << "\n";
-		ss << metricsprefix << "_recvbytes" << tag << " " << recvbytes << "\n";
-		ss << metricsprefix << "_sendcost" << tag << " " << sendcost << "\n";
-		ss << metricsprefix << "_recvcost" << tag << " " << recvcost << "\n";
+		for (int i = 0; i < metirs_num; ++i)
+		{
+			ss << metricsprefix << metirs[i] << tag << " " << value[i] << "\n";
+		}
 	}
 	return ss.str();
 }
@@ -730,7 +743,7 @@ bool RedisAsync::Connect()
 		RedisResult rst;
 		if (ReadReply(rst) != 1)
 		{
-			LogError("RedisAsync Maybe Not Valid Redis Address, host=%s[%s] port=%d", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port);
+			LogError("RedisAsync Maybe Not Valid Redis Address, host=%s[%s] port=%d ssl=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_bssl ? "true" : "false");
 			Close();
 			return false;
 		}
@@ -758,7 +771,7 @@ bool RedisAsync::Connect()
 		RedisResult rst;
 		if (ReadReply(rst) != 1)
 		{
-			LogError("RedisAsync Maybe Not Valid Redis Address, host=%s[%s] port=%d", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port);
+			LogError("RedisAsync Maybe Not Valid Redis Address, host=%s[%s] port=%d ssl=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_bssl ? "true" : "false");
 			Close();
 			return false;
 		}

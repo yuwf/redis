@@ -245,7 +245,7 @@ RedisSpinLockData* RedisSpinLockRecord::Reg(const std::string& key)
 	{
 		boost::shared_lock<boost::shared_mutex> lock(mutex);
 		auto it = ((const RedisSpinLockDataMap&)records).find(key); // 显示的调用const的find
-		if (it != records.end())
+		if (it != records.cend())
 		{
 			return it->second;
 		}
@@ -268,6 +268,16 @@ std::string RedisSpinLockRecord::Snapshot(SnapshotType type, const std::string& 
 		boost::unique_lock<boost::shared_mutex> lock(mutex);
 		lastdata = records;
 	}
+
+	static const int metirs_num = 7;
+	static const char* metirs[metirs_num] = 
+	{ 
+		"redissyncspinlock_lockcount", "redissyncspinlock_faillockcount", 
+		"redissyncspinlock_trylock", "redissyncspinlock_maxtrylock",
+		"redissyncspinlock_locked", "redissyncspinlock_maxlocked",
+		"redissyncspinlock_spincount"
+	};
+
 	std::ostringstream ss;
 	if (type == Json)
 	{
@@ -275,20 +285,22 @@ std::string RedisSpinLockRecord::Snapshot(SnapshotType type, const std::string& 
 		int index = 0;
 		for (const auto& it : lastdata)
 		{
-			ss << ((++index) == 1 ? "{" : ",{");
-			for (const auto& t : tags)
+			RedisSpinLockData* p = it.second;
+			int64_t value[metirs_num] = { p->lockcount, p->faillockcount, p->trylockTSC / TSCPerUS(), p->trylockMaxTSC / TSCPerUS(), p->lockedTSC / TSCPerUS(), p->lockedMaxTSC / TSCPerUS(), p->spincount };
+			ss << ((++index) == 1 ? "[" : ",[");
+			for (int i = 0; i < metirs_num; ++i)
 			{
-				ss << "\"" << t.first << "\":\"" << t.second << "\",";
+				ss << (i == 0 ? "{" : ",{");
+				ss << "\"metrics\":\"" << metricsprefix << metirs[i] << "\",";
+				ss << "\"key\":\"" << it.first << "\",";
+				for (const auto& it : tags)
+				{
+					ss << "\"" << it.first << "\":\"" << it.second << "\",";
+				}
+				ss << "\"value\":" << value[i] << "";
+				ss << "}";
 			}
-			ss << "\"key\":\"" << it.first << "\",";
-			ss << "\"" << metricsprefix << "_lockcount\":" << it.second->lockcount << ",";
-			ss << "\"" << metricsprefix << "_faillockcount\":" << it.second->faillockcount << ",";
-			ss << "\"" << metricsprefix << "_trylock\":" << (it.second->trylockTSC / TSCPerUS()) << ",";
-			ss << "\"" << metricsprefix << "_maxtrylock\":" << (it.second->trylockMaxTSC / TSCPerUS()) << ",";
-			ss << "\"" << metricsprefix << "_locked\":" << (it.second->lockedTSC / TSCPerUS()) << ",";
-			ss << "\"" << metricsprefix << "_maxlocked\":" << (it.second->lockedMaxTSC / TSCPerUS()) << ",";
-			ss << "\"" << metricsprefix << "_spincount\":" << it.second->spincount;
-			ss << "}";
+			ss << "]";
 		}
 		ss << "]";
 	}
@@ -301,33 +313,14 @@ std::string RedisSpinLockRecord::Snapshot(SnapshotType type, const std::string& 
 		}
 		for (const auto& it : lastdata)
 		{
-			ss << metricsprefix << "_lockcount";
-			ss << ",key=" << it.first << tag;
-			ss << " value=" << it.second->lockcount << "i\n";
-
-			ss << metricsprefix << "_faillockcount";
-			ss << ",key=" << it.first << tag;
-			ss << " value=" << it.second->faillockcount << "i\n";
-
-			ss << metricsprefix << "_trylock";
-			ss << ",key=" << it.first << tag;
-			ss << " value=" << (it.second->trylockTSC / TSCPerUS()) << "i\n";
-
-			ss << metricsprefix << "_maxtrylock";
-			ss << ",key=" << it.first << tag;
-			ss << " value=" << (it.second->trylockMaxTSC / TSCPerUS()) << "i\n";
-
-			ss << metricsprefix << "_locked";
-			ss << ",key=" << it.first << tag;
-			ss << " value=" << (it.second->lockedTSC / TSCPerUS()) << "i\n";
-
-			ss << metricsprefix << "_maxlocked";
-			ss << ",key=" << it.first << tag;
-			ss << " value=" << (it.second->lockedMaxTSC / TSCPerUS()) << "i\n";
-
-			ss << metricsprefix << "_spincount";
-			ss << ",key=" << it.first << tag;
-			ss << " value=" << it.second->spincount << "i\n";
+			RedisSpinLockData* p = it.second;
+			int64_t value[metirs_num] = { p->lockcount, p->faillockcount, p->trylockTSC / TSCPerUS(), p->trylockMaxTSC / TSCPerUS(), p->lockedTSC / TSCPerUS(), p->lockedMaxTSC / TSCPerUS(), p->spincount };
+			for (int i = 0; i < metirs_num; ++i)
+			{
+				ss << metricsprefix << metirs[i];
+				ss << ",key=" << it.first << tag;
+				ss << " value=" << value[i] << "i\n";
+			}
 		}
 	}
 	else if (type == Prometheus)
@@ -339,33 +332,14 @@ std::string RedisSpinLockRecord::Snapshot(SnapshotType type, const std::string& 
 		}
 		for (const auto& it : lastdata)
 		{
-			ss << metricsprefix << "_lockcount";
-			ss << "{key=\"" << it.first << "\"" << tag << "}";
-			ss << " " << it.second->lockcount << "\n";
-
-			ss << metricsprefix << "_faillockcount";
-			ss << "{key=\"" << it.first << "\"" << tag << "}";
-			ss << " " << it.second->faillockcount << "\n";
-
-			ss << metricsprefix << "_trylock";
-			ss << "{key=\"" << it.first << "\"" << tag << "}";
-			ss << " " << (it.second->trylockTSC / TSCPerUS()) << "\n";
-
-			ss << metricsprefix << "_maxtrylock";
-			ss << "{key=\"" << it.first << "\"" << tag << "}";
-			ss << " " << (it.second->trylockMaxTSC / TSCPerUS()) << "\n";
-
-			ss << metricsprefix << "_locked";
-			ss << "{key=\"" << it.first << "\"" << tag << "}";
-			ss << " " << (it.second->lockedTSC / TSCPerUS()) << "\n";
-
-			ss << metricsprefix << "_maxlocked";
-			ss << "{key=\"" << it.first << "\"" << tag << "}";
-			ss << " " << (it.second->lockedMaxTSC / TSCPerUS()) << "\n";
-
-			ss << metricsprefix << "_spincount";
-			ss << "{key=\"" << it.first << "\"" << tag << "}";
-			ss << " " << it.second->spincount << "\n";
+			RedisSpinLockData* p = it.second;
+			int64_t value[metirs_num] = { p->lockcount, p->faillockcount, p->trylockTSC / TSCPerUS(), p->trylockMaxTSC / TSCPerUS(), p->lockedTSC / TSCPerUS(), p->lockedMaxTSC / TSCPerUS(), p->spincount };
+			for (int i = 0; i < metirs_num; ++i)
+			{
+				ss << metricsprefix << metirs[i];
+				ss << "{key=\"" << it.first << "\"" << tag << "}";
+				ss << " " << value[i] << "\n";
+			}
 		}
 	}
 	return ss.str();
