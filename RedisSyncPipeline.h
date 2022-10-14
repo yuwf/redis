@@ -11,311 +11,647 @@ public:
 	RedisSyncPipeline(RedisSync& redis) : m_redis(redis) {};
 	virtual ~RedisSyncPipeline() {}
 
-	// 字符串命令
-	RedisResultBind& Command(const std::string& str); // 绑定值 根据命令来确定
+	// 绑定值 根据命令来确定
+	RedisResultBind& Command(const std::string& cmdname)
+	{
+		if (cmdname.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand(cmdname));
+	}
 
+	template<class T1>
+	RedisResultBind& Command(const std::string& cmdname, const T1& t1)
+	{
+		if (cmdname.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand(cmdname, t1));
+	}
+
+	template<class T1, class T2>
+	RedisResultBind& Command(const std::string& cmdname, const T1& t1, const T2& t2)
+	{
+		if (cmdname.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand(cmdname, t1, t2));
+	}
+
+	template<class T1, class T2, class T3>
+	RedisResultBind& Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3)
+	{
+		if (cmdname.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3));
+	}
+
+	template<class T1, class T2, class T3, class T4>
+	RedisResultBind& Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4)
+	{
+		if (cmdname.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4));
+	}
+
+	template<class T1, class T2, class T3, class T4, class T5>
+	RedisResultBind& Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5)
+	{
+		if (cmdname.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5));
+	}
+
+	template<class T1, class T2, class T3, class T4, class T5, class T6>
+	RedisResultBind& Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5, const T5& t6)
+	{ 
+		if (cmdname.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5, t6));
+	}
+
+	RedisResultBind& DoCommand(const RedisCommand& cmd)
+	{
+		m_cmds.push_back(cmd);
+		m_binds.push_back(RedisResultBind());
+		return m_binds.back();
+	}
+
+	// 执行批处理
+	bool Do()
+	{
+		if ((int)m_cmds.size() == 0) return true;
+		std::vector<RedisResult> rst;
+		return Do(rst);
+	}
+	bool Do(std::vector<RedisResult>& rst)
+	{
+		if ((int)m_cmds.size() == 0) return true;
+
+		// 缓存直接move掉 防止下面的回调中出现了异常，导致本缓存的数据没有清除
+		std::vector<RedisCommand> cmds(std::move(m_cmds));
+		std::vector<RedisResultBind> binds(std::move(m_binds));;
+		std::map<int, std::shared_ptr<_RedisResultBind_>> binds2(std::move(m_binds2));;
+
+		std::vector<RedisResult> rst_;
+		if (!m_redis.DoCommand(cmds, rst_))
+		{
+			return false;
+		}
+		rst.reserve(rst.size() + rst_.size());
+		for (int i = 0; i < rst_.size(); ++i)
+		{
+			rst.push_back(rst_[i]);
+			if (binds[i].callback)
+			{
+				binds[i].callback(rst_[i]);
+			}
+			// 自定义复合命令
+			auto it = binds2.find(i);
+			if (it != binds2.end())
+			{
+				rst.pop_back(); // pop出这个命令 放到复合命令的数组中 复合命令组织完后 将组织的result放到rst中
+				RedisResult::Array* pArray = boost::any_cast<RedisResult::Array>(&(it->second->m_result.v));
+				pArray->push_back(rst_[i]);
+				if (i == it->second->m_end)
+				{
+					rst.push_back(it->second->m_result);
+					if (it->second->m_bind.callback)
+					{
+						it->second->m_bind.callback(it->second->m_result);
+					}
+				}
+			}
+		}
+		return true;
+	}
 
 	//////////////////////////////////////////////////////////////////////////
-	// DEL命令
-	RedisResultBind& Del(const std::string& key);	// int 删除个数
-	RedisResultBind& Del(const std::vector<std::string>& key);
+	// DEL命令 绑定：int 删除个数
+	RedisResultBind& Del(const std::string& key)
+	{
+		return DoCommand(RedisCommand("DEL", key));
+	}
+	RedisResultBind& Dels(const std::vector<std::string>& keys)
+	{
+		if (keys.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("DEL", keys));
+	}
 
-	RedisResultBind& Dump(const std::string& key);	// string
+	// DUMP命令 绑定：string
+	RedisResultBind& Dump(const std::string& key)
+	{
+		return DoCommand(RedisCommand("DUMP", key));
+	}
 
-	RedisResultBind& Exists(const std::string& key); // int 0不存在 1存在
+	//EXISTS命令 绑定：int 0不存在 1存在
+	RedisResultBind& Exists(const std::string& key)
+	{
+		return DoCommand(RedisCommand("EXISTS", key));
+	}
 
-	RedisResultBind& Expire(const std::string& key, long long value);//int 1成功 0失败
-	RedisResultBind& ExpireAt(const std::string& key, long long value);
-	RedisResultBind& PExpire(const std::string& key, long long value);
-	RedisResultBind& PExpireAt(const std::string& key, long long value);
-	RedisResultBind& Persist(const std::string& key);
-	RedisResultBind& TTL(const std::string& key);	//long long 剩余的过期时间
-	RedisResultBind& PTTL(const std::string& key);
+	// EXPIRE 绑定：int 1成功 0失败
+	RedisResultBind& Expire(const std::string& key, long long value)
+	{
+		return DoCommand(RedisCommand("EXPIRE", key, value));
+	}
+	RedisResultBind& ExpireAt(const std::string& key, long long value)
+	{
+		return DoCommand(RedisCommand("EXPIREAT", key, value));
+	}
+	RedisResultBind& PExpire(const std::string& key, long long value)
+	{
+		return DoCommand(RedisCommand("PEXPIRE", key, value));
+	}
+	RedisResultBind& PExpireAt(const std::string& key, long long value)
+	{
+		return DoCommand(RedisCommand("PEXPIREAT", key, value));
+	}
+	// PERSIST命令 绑定：int 1成功 0失败
+	RedisResultBind& Persist(const std::string& key)
+	{
+		return DoCommand(RedisCommand("PERSIST", key));
+	}
 
-	RedisResultBind& Keys(const std::string& pattern); // string数组
+	// TTL命令 绑定：long long 剩余的过期时间
+	RedisResultBind& TTL(const std::string& key)
+	{
+		return DoCommand(RedisCommand("TTL", key));
+	}
+	RedisResultBind& PTTL(const std::string& key)
+	{
+		return DoCommand(RedisCommand("PTTL", key));
+	}
 
-	RedisResultBind& Move(const std::string& key, int index); //int 0成功 1失败
+	//KEYS命令 绑定：string数组
+	RedisResultBind& Keys(const std::string& pattern)
+	{
+		return DoCommand(RedisCommand("KEYS", pattern));
+	}
 
-	RedisResultBind& RandomKey(); // string
+	// MOVE命令 绑定：int 0成功 1失败
+	RedisResultBind& Move(const std::string& key, int index)
+	{
+		return DoCommand(RedisCommand("MOVE", key, index));
+	}
 
-	RedisResultBind& Rename(const std::string& key, const std::string& newkey); // string OK:成功 空字符串失败
-	RedisResultBind& RenameNX(const std::string& key, const std::string& newkey);//int 1成功 0失败
+	// RANDOMKEY命令 绑定： string
+	RedisResultBind& RandomKey()
+	{
+		return DoCommand(RedisCommand("RANDOMKEY"));
+	}
 
-	RedisResultBind& Scan(int cursor, const std::string& match, int count); // Array 0位：表示下个游标(=0:结尾) 1位：string数组 key
+	// RENAME命令 绑定：string OK:成功 空字符串失败
+	RedisResultBind& Rename(const std::string& key, const std::string& newkey)
+	{
+		return DoCommand(RedisCommand("RENAME", key, newkey));
+	}
+
+	//RENAMENX命令 绑定：int 1成功 0失败
+	RedisResultBind& RenameNX(const std::string& key, const std::string& newkey)
+	{
+		return DoCommand(RedisCommand("RENAMENX", key, newkey));
+	}
+
+	// SCAN命令 绑定：Array 0位：表示下个游标(=0:结尾) 1位：string数组 key
+	RedisResultBind& Scan(int cursor, const std::string& match, int count)
+	{
+		RedisCommand cmd("SCAN", cursor);
+		if (!match.empty()) { cmd.Add("MATCH"); cmd.Add(match); }
+		if (count > 0) { cmd.Add("COUNT"); cmd.Add(count); }
+		return DoCommand(cmd);
+	}
 	
-	RedisResultBind& Type(const std::string& key); // string [none、string、list、set、zset、hash]
+	// TYPE命令 绑定：string [none、string、list、set、zset、hash]
+	RedisResultBind& Type(const std::string& key)
+	{
+		return DoCommand(RedisCommand("TYPE", key));
+	}
 
 
 	//////////////////////////////////////////////////////////////////////////
-	// GET 命令
-	RedisResultBind& Get(const std::string& key); // string
+	// GET 命令 绑定：string
+	RedisResultBind& Get(const std::string& key)
+	{
+		return DoCommand(RedisCommand("GET", key));
+	}
 
-	// INCR命令
-	RedisResultBind& Incr(const std::string& key); // int 最新值
+	// INCR命令 绑定：int 最新值
+	RedisResultBind& Incr(const std::string& key)
+	{
+		return DoCommand(RedisCommand("INCR", key));
+	}
 
-	// INCRBY命令
-	RedisResultBind& Incrby(const std::string& key, long long value); // long long 最新值
+	// INCRBY命令 绑定：long long 最新值
 	template<class Value>
 	RedisResultBind& Incrby(const std::string& key, Value value)
 	{
-		return Incrby(key, (long long)value);
+		return DoCommand(RedisCommand("INCRBY", key, value));
 	}
 
-	// MGET命令
-	RedisResultBind& MGet(const std::vector<std::string>& keys); // string数组
+	// MGET命令 绑定：string数组
+	RedisResultBind& MGet(const std::vector<std::string>& keys)
+	{
+		if (keys.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("MGET", keys));
+	}
 
-	// MSET命令
-	RedisResultBind& MSet(const std::map<std::string, std::string>& kvs); // string OK
+	// MSET命令 绑定：string OK
 	template<class FieldValueMap>
 	RedisResultBind& MSet(const FieldValueMap& kvs)
 	{
-		std::map<std::string, std::string> kvs_;
-		for (auto it = kvs.begin(); it != kvs.end(); ++it)
-			kvs_[Redis::to_string(it->first)] = Redis::to_string(it->second);
-		return MSet(kvs_);
+		if (kvs.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("MSET", kvs));
 	}
 
-	// SET 命令
-	// ex(秒) 和 px(毫秒) 只能使用一个，另一个必须有-1, 否则优先使用ex
-	RedisResultBind& Set(const std::string& key, const std::string& value, unsigned int ex = -1, unsigned int px = -1, bool nx = false); // string OK:成功 空字符串失败
+	// SET 命令 ex(秒) 和 px(毫秒) 只能使用一个，另一个必须有-1, 否则优先使用ex 绑定：string OK:成功 空字符串失败
 	template<class Value>
 	RedisResultBind& Set(const std::string& key, const Value& value, unsigned int ex = -1, unsigned int px = -1, bool nx = false)
 	{
-		return Set(key, Redis::to_string(value), ex, px, nx);
+		RedisCommand cmd("SET", key, value);
+		if (ex != -1) { cmd.Add("EX"); cmd.Add(ex); }
+		else if (px != -1) { cmd.Add("PX"); cmd.Add(px); }
+		if (nx) { cmd.Add("NX"); }
+		return DoCommand(cmd);
 	}
 
 
 	//////////////////////////////////////////////////////////////////////////
-	// HEDL命令
-	RedisResultBind& HDel(const std::string& key, const std::string& field); // int 删除个数
-	RedisResultBind& HDels(const std::string& key, const std::vector<std::string>& fields);
+	// HEDL命令 绑定：int 删除个数
 	template<class Field>
 	RedisResultBind& HDel(const std::string& key, const Field& field)
 	{
-		return HDel(key, Redis::to_string(field));
+		return DoCommand(RedisCommand("HDEL", key, field));
 	}
 	template<class FieldList>
 	RedisResultBind& HDels(const std::string& key, const FieldList& fields)
 	{
-		std::vector<std::string> fields_;
-		fields_.reserve(fields.size());
-		for (auto it = fields.begin(); it != fields.end(); ++it)
-			fields_.emplace_back(Redis::to_string(*it));
-		return HDels(key, fields_);
+		if (fields.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("HDEL", key, fields));
 	}
 
-	// HEXISTS命令
-	RedisResultBind& HExists(const std::string& key, const std::string& field); // int 0不存在 1存在
+	// HEXISTS命令 绑定：
 	template<class Field>
-	RedisResultBind& HExists(const std::string& key, const Field& field)
+	RedisResultBind& HExists(const std::string& key, const Field& field) // int 0不存在 1存在
 	{
-		return HExists(key, Redis::to_string(field));
+		return DoCommand(RedisCommand("HEXISTS", key, field));
 	}
 
-	// HGET命令
-	RedisResultBind& HGet(const std::string& key, const std::string& field); // string
+	// HGET命令 绑定：string
 	template<class Field>
 	RedisResultBind& HGet(const std::string& key, const Field& field)
 	{
-		return HGet(key, Redis::to_string(field));
+		return DoCommand(RedisCommand("HGET", key, field));
 	}
 
-	// HGETALL命令
-	RedisResultBind& HGetAll(const std::string& key); // string数组 key 和 value
-	// MHMGETALL自定义复合命令 获取多个key中的值
-	RedisResultBind& MHGetAll(const std::vector<std::string>& keys); // string两维数组
+	// HGETALL命令 绑定：string数组 key 和 value
+	RedisResultBind& HGetAll(const std::string& key)
+	{
+		return DoCommand(RedisCommand("HGETALL", key));
+	}
 
-	// HINCRBY命令
-	RedisResultBind& HIncrby(const std::string& key, const std::string& field, long long value); // int 最新值
+	// MHMGETALL自定义复合命令 获取多个key中的值 绑定：string两维数组
+	RedisResultBind& MHGetAll(const std::vector<std::string>& keys)
+	{
+		if (keys.empty()) return RedisResultBind::Empty();
+		std::shared_ptr<_RedisResultBind_> bindptr = std::make_shared<_RedisResultBind_>();
+		bindptr->m_end = m_binds.size() - 1 + keys.size();
+		for (auto it : keys)
+		{
+			DoCommand(RedisCommand("HGETALL", it));
+			m_binds2[m_binds.size() - 1] = bindptr; // 记录下标对应的新绑定
+		}
+		return bindptr->m_bind;
+	}
+
+	// HINCRBY命令 绑定：int 最新值
 	template<class Field, class Value>
 	RedisResultBind& HIncrby(const std::string& key, const Field& field, Value value)
 	{
-		return HIncrby(key, Redis::to_string(field), (long long)value);
+		return DoCommand(RedisCommand("HINCRBY", key, field, value));
 	}
 
-	// HKEYS命令
-	RedisResultBind& HKeys(const std::string& key); // string数组
+	// HKEYS命令 绑定：string数组
+	RedisResultBind& HKeys(const std::string& key)
+	{
+		return DoCommand(RedisCommand("HKEYS", key));
+	}
 
-	// HLEN命令
-	RedisResultBind& HLen(const std::string& key); // int 最新值
+	// HLEN命令 绑定：int 最新值
+	RedisResultBind& HLen(const std::string& key)
+	{
+		return DoCommand(RedisCommand("HLEN", key));
+	}
 	
-	// HMGET命令
-	RedisResultBind& HMGet(const std::string& key, const std::vector<std::string>& fields); // string数组
+	// HMGET命令  绑定：string数组
 	template<class FieldList>
 	RedisResultBind& HMGet(const std::string& key, const FieldList& fields)
 	{
-		std::vector<std::string> fields_;
-		fields_.reserve(fields.size());
-		for (auto it = fields.begin(); it != fields.end(); ++it)
-			fields_.emplace_back(Redis::to_string(*it));
-		return HMGet(key, fields_);
+		if (fields.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("HMGET", key, fields));
 	}
-	// MHMGET自定义复合命令 获取多个key中多个相同field字段的值
-	RedisResultBind& MHMGet(const std::vector<std::string>& keys, const std::vector<std::string>& fields); // string两维数组
-	// MHGET自定义复合命令 获取多个key中相同field字段的值
-	RedisResultBind& MHGet(const std::vector<std::string>& keys, const std::string& field); // string数组
 
-	// HMSET命令
-	RedisResultBind& HMSet(const std::string& key, const std::map<std::string, std::string>& kvs); // string OK
+	// MHMGET自定义复合命令 获取多个key中多个相同field字段的值 绑定：string两维数组
+	RedisResultBind& MHMGet(const std::vector<std::string>& keys, const std::vector<std::string>& fields)
+	{
+		if (keys.empty()) return RedisResultBind::Empty();
+		if (fields.empty()) return RedisResultBind::Empty();
+		std::shared_ptr<_RedisResultBind_> bindptr = std::make_shared<_RedisResultBind_>();
+		bindptr->m_end = m_binds.size() - 1 + keys.size();
+		for (auto kit : keys)
+		{
+			DoCommand(RedisCommand("HMGET", kit, fields));
+			m_binds2[m_binds.size() - 1] = bindptr; // 记录下标对应的新绑定
+		}
+		return bindptr->m_bind;
+	}
+
+	// MHGET自定义复合命令 获取多个key中相同field字段的值 绑定：string数组
+	RedisResultBind& MHGet(const std::vector<std::string>& keys, const std::string& field)
+	{
+		if (keys.empty()) return RedisResultBind::Empty();
+		std::shared_ptr<_RedisResultBind_> bindptr = std::make_shared<_RedisResultBind_>();
+		bindptr->m_end = m_binds.size() - 1 + keys.size();
+		for (auto it : keys)
+		{
+			DoCommand(RedisCommand("HGET", it, field));
+			m_binds2[m_binds.size() - 1] = bindptr; // 记录下标对应的新绑定
+		}
+		return bindptr->m_bind;
+	}
+
+	// HMSET命令 绑定：string OK
 	template<class FieldValueMap>
 	RedisResultBind& HMSet(const std::string& key, const FieldValueMap& kvs)
 	{
-		std::map<std::string, std::string> kvs_;
-		for (auto it = kvs.begin(); it != kvs.end(); ++it)
-			kvs_[Redis::to_string(it->first)] = Redis::to_string(it->second);
-		return HMSet(key, kvs_);
+		if (kvs.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("HMSET", key, kvs));
 	}
 
-	// HSET命令
-	RedisResultBind& HSet(const std::string& key, const std::string& field, const std::string& value); // int 之前没有返回1 之前有返回0
+	// HSET命令 绑定：int 之前没有返回1 之前有返回0
 	template<class Field, class Value>
 	RedisResultBind& HSet(const std::string& key, const Field& field, const Value& value)
 	{
-		return HSet(key, Redis::to_string(field), Redis::to_string(value));
+		return DoCommand(RedisCommand("HSET", key, field, value));
 	}
 
-	// HVALS命令
-	RedisResultBind& HVals(const std::string& key); // string数组
+	// HVALS命令 绑定：string数组
+	RedisResultBind& HVals(const std::string& key)
+	{
+		return DoCommand(RedisCommand("HVALS", key));
+	}
 
-	// HSCAN
-	RedisResultBind& HScan(const std::string& key, int cursor, const std::string& match, int count); // Array 0位：表示下个游标(=0:结尾) 1位：string数组 key 和 value
+	// HSCAN命令 绑定：Array 0位：表示下个游标(=0:结尾) 1位：string数组 key 和 value
+	RedisResultBind& HScan(const std::string& key, int cursor, const std::string& match, int count)
+	{
+		RedisCommand cmd("HSCAN", key, cursor);
+		if (!match.empty()) { cmd.Add("MATCH"); cmd.Add(match); }
+		if (count > 0) { cmd.Add("COUNT"); cmd.Add(count); }
+		return DoCommand(cmd);
+	}
 	
 
 	//////////////////////////////////////////////////////////////////////////
-	// LLEN命令
-	RedisResultBind& LLen(const std::string& key); // int 长度
+	// LLEN命令  绑定：int 长度
+	RedisResultBind& LLen(const std::string& key)
+	{
+		return DoCommand(RedisCommand("LLEN", key));
+	}
 
-	// LPOP命令
-	RedisResultBind& LPop(const std::string& key); // string 被移除的元素
+	// LPOP命令 绑定：string 被移除的元素
+	RedisResultBind& LPop(const std::string& key)
+	{
+		return DoCommand(RedisCommand("LPOP", key));
+	}
 
-	// LPUSH命令
-	RedisResultBind& LPush(const std::string& key, const std::string& value); // int 最新长度
-	RedisResultBind& LPushs(const std::string& key, const std::vector<std::string>& values);
+	// LPUSH命令 绑定：int 最新长度
 	template<class Value>
 	RedisResultBind& LPush(const std::string& key, const Value& value)
 	{
-		return LPush(key, Redis::to_string(value));
+		return DoCommand(RedisCommand("LPUSH", key, value));
 	}
 	template<class ValueList>
 	RedisResultBind& LPushs(const std::string& key, const ValueList& values)
 	{
-		std::vector<std::string> values_;
-		values_.reserve(values.size());
-		for (auto it = values.begin(); it != values.end(); ++it)
-			values_.emplace_back(Redis::to_string(*it));
-		return LPushs(key, values_);
+		if (values.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("LPUSH", key, values));
 	}
 
-	// LRANGE命令
-	// 1成功 0不成功 -1表示网络或其他错误
-	// 若成功 rst为数组 元素为string
-	RedisResultBind& LRange(const std::string& key, int start, int stop); // string数组
-
-	// LREM命令
-	RedisResultBind& LRem(const std::string& key, int count, const std::string& value); // int 移除的数量
-	template<class Value>
-	RedisResultBind&  LRem(const std::string& key, int count, const Value& value)
+	// LRANGE命令 绑定：string数组
+	RedisResultBind& LRange(const std::string& key, int start, int stop) // 
 	{
-		return LRem(key, count, Redis::to_string(value));
+		return DoCommand(RedisCommand("LRANGE", key, start, stop));
 	}
 
-	// LTRIM命令
-	RedisResultBind& LTrim(const std::string& key, int start, int stop);// string OK 或者 nil
+	// LREM命令 绑定：int 移除的数量
+	template<class Value>
+	RedisResultBind& LRem(const std::string& key, int count, const Value& value)
+	{
+		return DoCommand(RedisCommand("LREM", key, count, value));
+	}
 
-	// RPOP命令
-	RedisResultBind& RPop(const std::string& key); // string 被移除的元素
+	// LTRIM命令 绑定：string OK 或者 nil
+	RedisResultBind& LTrim(const std::string& key, int start, int stop)
+	{
+		return DoCommand(RedisCommand("LTRIM", key, start, stop));
+	}
+
+	// RPOP命令  绑定:string 被移除的元素
+	RedisResultBind& RPop(const std::string& key)
+	{
+		return DoCommand(RedisCommand("RPOP", key));
+	}
 	
-	 // RPUSH命令
-	RedisResultBind& RPush(const std::string& key, const std::string& value); // int 最新长度
-	RedisResultBind& RPushs(const std::string& key, const std::vector<std::string>& values);
+	 // RPUSH命令 绑定：int 最新长度
 	template<class Value>
 	RedisResultBind& RPush(const std::string& key, const Value& value)
 	{
-		return RPush(key, Redis::to_string(value));
+		return DoCommand(RedisCommand("RPUSH", key, value));
 	}
 	template<class ValueList>
 	RedisResultBind& RPushs(const std::string& key, const ValueList& values)
 	{
-		std::vector<std::string> values_;
-		values_.reserve(values.size());
-		for (auto it = values.begin(); it != values.end(); ++it)
-			values_.emplace_back(Redis::to_string(*it));
-		return RPushs(key, values_);
+		if (values.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("RPUSH", key, values));
 	}
 
 	//////////////////////////////////////////////////////////////////////////
-	// SADD命令
+	// SADD命令 绑定：int 添加的数量
 	template<class Value>
-	RedisResultBind& SAdd(const std::string& key, const Value& value); // int 添加的数量
+	RedisResultBind& SAdd(const std::string& key, const Value& value)
+	{
+		return DoCommand(RedisCommand("SADD", key, value));
+	}
 	template<class ValueList>
-	RedisResultBind& SAdds(const std::string& key, const ValueList& values); // int 添加的数量
+	RedisResultBind& SAdds(const std::string& key, const ValueList& values) // int 添加的数量
+	{
+		if (values.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("SADD", key, values));
+	}
 
-	// SCARD命令
-	RedisResultBind& SCard(const std::string& key); // int 长度
+	// SCARD命令 绑定：int 长度
+	RedisResultBind& SCard(const std::string& key)
+	{
+		return DoCommand(RedisCommand("SCARD", key));
+	}
 
-	// SDIFF命令
-	RedisResultBind& SDiff(const std::vector<std::string>& keys); // string数组
+	// SDIFF命令 绑定：string数组
+	RedisResultBind& SDiff(const std::vector<std::string>& keys)
+	{
+		if (keys.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("SDIFF", keys));
+	}
 
-	// SINTER命令
-	RedisResultBind& Sinter(const std::vector<std::string>& keys); // string数组
+	// SINTER命令 绑定：string数组
+	RedisResultBind& Sinter(const std::vector<std::string>& keys)
+	{
+		if (keys.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("SINTER", keys));
+	}
 
-	// 	SISMEMBER命令
-	RedisResultBind& SISMember(const std::string& key, const std::string& value); // int 1存在 0不存在
+	// 	SISMEMBER命令 绑定：int 1存在 0不存在
 	template<class Value>
 	RedisResultBind& SISMember(const std::string& key, const Value& value)
 	{
-		return SISMember(key, Redis::to_string(value));
+		return DoCommand(RedisCommand("SISMEMBER", key, value));
 	}
 
-	// SMEMBERS命令
-	RedisResultBind& SMembers(const std::string& key); // string数组
+	// SMEMBERS命令 绑定：string数组
+	RedisResultBind& SMembers(const std::string& key)
+	{
+		return DoCommand(RedisCommand("SMEMBERS", key));
+	}
 
-	// SPOP命令
-	RedisResultBind& SPop(const std::string& key); // string
+	// SPOP命令 绑定：string
+	RedisResultBind& SPop(const std::string& key)
+	{
+		return DoCommand(RedisCommand("SPOP", key));
+	}
 
-	// SRANDMEMBER命令
-	RedisResultBind& SRandMember(const std::string& key); // string
+	// SRANDMEMBER命令 绑定：string
+	RedisResultBind& SRandMember(const std::string& key)
+	{
+		return DoCommand(RedisCommand("SRANDMEMBER", key));
+	}
 
-	// SREM命令
-	RedisResultBind& SRem(const std::string& key, const std::string& value); // int 移除的数量
-	RedisResultBind& SRems(const std::string& key, const std::vector<std::string>& values);
+	// SREM命令 绑定：int 移除的数量
 	template<class Value>
 	RedisResultBind& SRem(const std::string& key, const Value& value)
 	{
-		return SRem(key, Redis::to_string(value));
+		return DoCommand(RedisCommand("SREM", key, value));
 	}
 	template<class ValueList>
 	RedisResultBind& SRems(const std::string& key, const ValueList& values)
 	{
-		std::vector<std::string> values_;
-		values_.reserve(values.size());
-		for (auto it = values.begin(); it != values.end(); ++it)
-			values_.emplace_back(Redis::to_string(*it));
-		return SRems(key, values_);
+		if (values.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("SREM", key, values));
 	}
 
-	// SUNION命令
-	RedisResultBind& SUnion(const std::vector<std::string>& keys); // string数组
+	// SUNION命令 绑定：string数组
+	RedisResultBind& SUnion(const std::vector<std::string>& keys)
+	{
+		if (keys.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("SUNION", keys));
+	}
 
 
 	//////////////////////////////////////////////////////////////////////////
-	// EVAL命令
-	RedisResultBind& Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args); // 根据返回值来绑定
-	// EVALSHA命令
-	RedisResultBind& Evalsha(const std::string& scriptsha1, const std::vector<std::string>& keys, const std::vector<std::string>& args); // 根据返回值来绑定
-	// SCRIPT EXISTS命令
-	RedisResultBind& ScriptExists(const std::string& scriptsha1); // int 1存在 0不存在
-	RedisResultBind& ScriptExists(const std::vector<std::string>& scriptsha1s); // int数组
-	// SCRIPT FLUSH命令
-	RedisResultBind& ScriptFlush(); // string OK
-	// SCRIPT KILL命令
-	RedisResultBind& ScriptKill(); // string OK
-	// SCRIPT LOAD命令
-	RedisResultBind& ScriptLoad(const std::string& script); // string script的SHA1校验和
+	// EVAL命令 绑定：根据返回值来绑定
+	RedisResultBind& Eval(const std::string& script, const std::vector<std::string>& keys, const std::vector<std::string>& args)
+	{
+		return DoCommand(RedisCommand("EVAL", script, keys.size(), keys, args));
+	}
+	// EVALSHA命令 绑定：根据返回值来绑定
+	RedisResultBind& Evalsha(const std::string& scriptsha1, const std::vector<std::string>& keys, const std::vector<std::string>& args)
+	{
+		return DoCommand(RedisCommand("EVALSHA", scriptsha1, keys.size(), keys, args));
+	}
 
-	// 执行批处理
-	bool Do();
-	bool Do(std::vector<RedisResult>& rst);
+	// SCRIPT EXISTS命令 绑定：int 1存在 0不存在
+	RedisResultBind& ScriptExists(const std::string& scriptsha1)
+	{
+		return DoCommand(RedisCommand("SCRIPT", "EXISTS", scriptsha1));
+	}
+	// SCRIPT EXISTS命令 绑定：int数组
+	RedisResultBind& ScriptExists(const std::vector<std::string>& scriptsha1s)
+	{
+		if (scriptsha1s.empty()) return RedisResultBind::Empty();
+		return DoCommand(RedisCommand("SCRIPT", "EXISTS", scriptsha1s));
+	}
+	// SCRIPT FLUSH命令 绑定：string OK
+	RedisResultBind& ScriptFlush()
+	{
+		return DoCommand(RedisCommand("SCRIPT", "FLUSH"));
+	}
+	// SCRIPT KILL命令 绑定：string OK
+	RedisResultBind& ScriptKill()
+	{
+		return DoCommand(RedisCommand("SCRIPT", "KILL"));
+	}
+	// SCRIPT LOAD命令 绑定：string script的SHA1校验和
+	RedisResultBind& ScriptLoad(const std::string& script)
+	{
+		return DoCommand(RedisCommand("SCRIPT", "LOAD", script));
+	}
+	// 执行脚本 绑定：根据返回值来绑定
+	RedisResultBind& Script(RedisScript& script, const std::vector<std::string>& keys, const std::vector<std::string>& args)
+	{
+		bool bjustload = false;
+		if (script.scriptsha1[0] == 0)
+		{
+			// 脚本为空先执行加载
+			std::string scriptsha1;
+			if (m_redis.ScriptLoad(script.script, scriptsha1) != 1)
+			{
+				return RedisResultBind::Empty();
+			}
+			if (scriptsha1.length() < sizeof(script.scriptsha1) / sizeof(script.scriptsha1[0]))
+			{
+				strcpy(script.scriptsha1, scriptsha1.c_str());
+			}
+			else
+			{
+				RedisLogError("DoScript scriptsha1 too big, %s", scriptsha1.c_str());
+				return RedisResultBind::Empty();
+			}
+			bjustload = true;
+		}
+
+		std::shared_ptr<RedisResultBind> bindptr = std::make_shared<RedisResultBind>();
+		Evalsha(script.scriptsha1, keys, args).callback = [&, bjustload, bindptr, keys, args](const RedisResult& rst)
+		{
+			if (bjustload)
+			{
+				if (bindptr->callback)
+				{
+					bindptr->callback(rst);
+				}
+				return;
+			}
+			if (rst.IsError() || rst.IsNull())
+			{
+				// 如果错误 重新加载一次 再试一次
+				std::string scriptsha1;
+				if (m_redis.ScriptLoad(script.script, scriptsha1) != 1)
+				{
+					bindptr->callback(rst);
+					return;
+				}
+				if (scriptsha1.length() < sizeof(script.scriptsha1) / sizeof(script.scriptsha1[0]))
+				{
+					strcpy(script.scriptsha1, scriptsha1.c_str());
+				}
+				else
+				{
+					RedisLogError("DoScript scriptsha1 too big, %s", scriptsha1.c_str());
+				}
+				RedisResult rst2;
+				m_redis.Evalsha(scriptsha1, keys, args, rst2);
+				if (bindptr->callback)
+				{
+					bindptr->callback(rst2);
+				}
+			}
+			else
+			{
+				if (bindptr->callback)
+				{
+					bindptr->callback(rst);
+				}
+			}
+		};
+		return *bindptr.get();
+	}
 
 protected:
 	RedisSync& m_redis;
@@ -325,22 +661,13 @@ protected:
 	// 自定义复合命令使用 支持绑定多条命令
 	struct _RedisResultBind_
 	{
-		int m_begin = 0;	// 对应m_binds下标
-		int m_end = 0;	// 对应m_binds下标
-		RedisResultBind m_bind;
-		RedisResult m_result;
-
-		void AddResult(const RedisResult& rst)
+		_RedisResultBind_()
 		{
-			if (m_result.v.empty())
-			{
-				m_result.v = RedisResult::Array();
-			}
-			RedisResult::Array* pArray = boost::any_cast<RedisResult::Array>(&m_result.v);
-			pArray->push_back(rst);
+			m_result.v = RedisResult::Array();
 		}
-
-		bool IsEnd(int index) { return index == m_end; }
+		int m_end = 0;	// 结束为止 对应m_binds下标
+		RedisResultBind m_bind;
+		RedisResult m_result; // 存储符合命令的结果集 数组
 	};
 	std::map<int, std::shared_ptr<_RedisResultBind_>> m_binds2; // index对应m_binds下标
 
@@ -363,33 +690,5 @@ private:
 	RedisSyncPipeline2& operator=(const RedisSyncPipeline2&) = delete;
 };
 
-template<class Value>
-RedisResultBind& RedisSyncPipeline::SAdd(const std::string& key, const Value& value)
-{
-	m_cmds.push_back(RedisCommand());
-	RedisCommand& cmd = m_cmds.back();
-	cmd.Add("SADD");
-	cmd.Add(key);
-	cmd.Add(value);
-
-	m_binds.push_back(RedisResultBind());
-	return m_binds.back();
-}
-
-template<class ValueList>
-RedisResultBind& RedisSyncPipeline::SAdds(const std::string& key, const ValueList& values)
-{
-	m_cmds.push_back(RedisCommand());
-	RedisCommand& cmd = m_cmds.back();
-	cmd.Add("SADD");
-	cmd.Add(key);
-	for (const auto& it : values)
-	{
-		cmd.Add(Redis::to_string(it));
-	}
-
-	m_binds.push_back(RedisResultBind());
-	return m_binds.back();
-}
 
 #endif

@@ -26,8 +26,6 @@ protected:
 	bool ScopedCheckLock(const std::string& key);
 	bool ScopedUnLock(const std::string& key, const std::string& lockid);
 
-	bool DoScirpt(const std::vector<std::string>& keys, const std::vector<std::string>& args, const std::string& script, std::string& scriptsha1, boost::shared_mutex& m);
-
 	RedisSync& m_redis; // 注册订阅事件
 	RedisSync m_subscriberedis; // 注册订阅事件
 

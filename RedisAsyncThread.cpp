@@ -61,24 +61,11 @@ void RedisAsyncThread::Join()
 		m_thread->join();
 }
 
-void RedisAsyncThread::Command(const std::string& str, const RedisAsync::CallBack& callback)
+void RedisAsyncThread::SendCommand(const RedisCommand& cmd, const RedisAsync::CallBack& callback)
 {
-	if (str.empty())
+	auto task = [this, cmd, callback]()
 	{
-		//这里改一下 保证即使有故障 回调也能调用
-		LogError("RedisAsyncThread command is empty");
-		if (callback && m_dispatch)
-		{
-			m_dispatch([callback]()->void
-			{
-				static RedisResult s_result;
-				callback(false, s_result);
-			});
-		}
-	}
-
-	auto task = [this, str, callback]() {
-		if (!m_redis.Command(str, callback))
+		if (!m_redis.SendCommand(cmd, callback))
 		{
 			if (callback && m_dispatch)
 			{
@@ -96,11 +83,11 @@ void RedisAsyncThread::Command(const std::string& str, const RedisAsync::CallBac
 	m_condition.notify_one();
 }
 
-void RedisAsyncThread::Command(const std::vector<std::string>& strs, const RedisAsync::MultiCallBack& callback)
+void RedisAsyncThread::SendCommand(const std::vector<RedisCommand>& cmds, const RedisAsync::MultiCallBack& callback)
 {
-	if (strs.empty())
+	if (cmds.empty())
 	{
-		LogError("RedisAsyncThread commands is empty");
+		RedisLogError("RedisAsyncThread commands is empty");
 		if (callback && m_dispatch)
 		{
 			m_dispatch([callback]()->void
@@ -110,8 +97,9 @@ void RedisAsyncThread::Command(const std::vector<std::string>& strs, const Redis
 			});
 		}
 	}
-	auto task = [this, strs, callback]() {
-		if (!m_redis.Command(strs, callback))
+	auto task = [this, cmds, callback]()
+	{
+		if (!m_redis.SendCommand(cmds, callback))
 		{
 			if (callback && m_dispatch)
 			{

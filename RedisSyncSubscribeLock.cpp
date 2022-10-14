@@ -5,7 +5,6 @@
 #include <boost/thread.hpp>
 
 #include "RedisSyncSubscribeLock.h"
-#include "Clock.h"
 
 static std::string s_redisasynclockuuid = boost::uuids::to_string(boost::uuids::random_generator()());
 
@@ -21,7 +20,7 @@ bool RedisSyncSubscribeLock::Init()
 {
 	if (!m_subscriberedis.InitRedis(m_redis.Host(), m_redis.Port(), m_redis.Auth(), m_redis.Index(), m_redis.SSL()))
 	{
-		LogError("RedisAsyncLockSubscirbe Init Error");
+		RedisLogError("RedisAsyncLockSubscirbe Init Error");
 		return false;
 	}
 
@@ -89,7 +88,7 @@ void RedisSyncSubscribeLock::Update()
 				// 删除等待锁
 				std::string waitkey = waitlock.key + ":wait";
 				std::string waitlock_ = m_channel + ":" + waitlock.lockid;
-				m_redis.Command("ZREM " + waitkey + " " + waitlock_);
+				m_redis.Command(std::string("ZREM"), waitkey, waitlock_);
 				continue;
 			}
 			if (checkkey.find(waitlock.key) == checkkey.end())
@@ -108,7 +107,7 @@ void RedisSyncSubscribeLock::ScopedLock(const std::string& key, std::function<vo
 {
 	if (!callback)
 	{
-		LogError("RedisSyncSubscribeLock callback is Empty, key=%s", key.c_str());
+		RedisLogError("RedisSyncSubscribeLock callback is Empty, key=%s", key.c_str());
 		return;
 	}
 	std::string lockid = std::to_string(m_increment++);
@@ -127,7 +126,7 @@ void RedisSyncSubscribeLock::ScopedLock(const std::string& key, std::function<vo
 		if (it != m_waitlocks.end())
 		{
 			// 这种情况理论上不会出现
-			LogError("RedisSyncSubscribeLock the same uuid, channel=%s lockid=%s", m_channel.c_str(), lockid.c_str());
+			RedisLogError("RedisSyncSubscribeLock the same uuid, channel=%s lockid=%s", m_channel.c_str(), lockid.c_str());
 			
 			auto failcallback = it->second.failcallback;
 			m_waitlocks.erase(it);
@@ -158,7 +157,7 @@ bool RedisSyncSubscribeLock::ScopedLock(const std::string& key, const std::strin
 	args.push_back(std::to_string(maxlockmsec));// ARGV[2]
 	args.push_back(m_channel);					// ARGV[3]
 
-	static const std::string script =
+	static const std::string lua =
 		R"lua(
 			local waitkey = KEYS[1] .. ":wait"
 			local waitlock = ARGV[3] .. ":" .. ARGV[1]
@@ -177,10 +176,14 @@ bool RedisSyncSubscribeLock::ScopedLock(const std::string& key, const std::strin
 			end
 			return 0
 		)lua";
+	static RedisScript script(lua);
 
-	static boost::shared_mutex m; // 保护scriptsha1
-	static std::string scriptsha1;
-	return DoScirpt(keys, args, script, scriptsha1, m);
+	RedisResult rst;
+	if (m_redis.Script(script, keys, args) == 1)
+	{
+		return rst.ToInt() == 1;
+	}
+	return false;
 }
 
 bool RedisSyncSubscribeLock::ScopedCheckLock(const std::string& key)
@@ -190,7 +193,7 @@ bool RedisSyncSubscribeLock::ScopedCheckLock(const std::string& key)
 
 	std::vector<std::string> args;
 
-	static const std::string script =
+	static const std::string lua =
 		R"lua(
 			local v = redis.call("GET", KEYS[1])
 			if v then
@@ -219,10 +222,14 @@ bool RedisSyncSubscribeLock::ScopedCheckLock(const std::string& key)
 				end
 			end
 		)lua";
+	static RedisScript script(lua);
 
-	static boost::shared_mutex m; // 保护scriptsha1
-	static std::string scriptsha1;
-	return DoScirpt(keys, args, script, scriptsha1, m);
+	RedisResult rst;
+	if (m_redis.Script(script, keys, args) == 1)
+	{
+		return rst.ToInt() == 1;
+	}
+	return false;
 }
 
 bool RedisSyncSubscribeLock::ScopedUnLock(const std::string& key, const std::string& lockid)
@@ -233,7 +240,7 @@ bool RedisSyncSubscribeLock::ScopedUnLock(const std::string& key, const std::str
 	std::vector<std::string> args;
 	args.push_back(lockid);		// ARGV[1]
 
-	static const std::string script =
+	static const std::string lua =
 		R"lua(
 			local v = redis.call("GET", KEYS[1])
 			local rst = 0
@@ -269,43 +276,12 @@ bool RedisSyncSubscribeLock::ScopedUnLock(const std::string& key, const std::str
 			
 			return 1
 		)lua";
+	static RedisScript script(lua);
 
-	static boost::shared_mutex m; // 保护scriptsha1
-	static std::string scriptsha1;
-	return DoScirpt(keys, args, script, scriptsha1, m);
-}
-
-bool RedisSyncSubscribeLock::DoScirpt(const std::vector<std::string>& keys, const std::vector<std::string>& args, const std::string& script, std::string& scriptsha1, boost::shared_mutex& m)
-{
+	RedisResult rst;
+	if (m_redis.Script(script, keys, args) == 1)
 	{
-		boost::shared_lock<boost::shared_mutex> l(m);
-		RedisResult rst;
-		if (scriptsha1.empty() || m_redis.Evalsha(scriptsha1, keys, args, rst) == 0)
-		{
-			// 脚本为空或者执行错误,下面执行加载和重试
-		}
-		else
-		{
-			return rst.ToInt() == 1;
-		}
-	}
-
-	// 加载脚本
-	{
-		boost::unique_lock<boost::shared_mutex> l(m);
-		if (m_redis.ScriptLoad(script, scriptsha1) != 1)
-		{
-			return false;
-		}
-	}
-	// 重试
-	{
-		boost::shared_lock<boost::shared_mutex> l(m);
-		RedisResult rst;
-		if (m_redis.Evalsha(scriptsha1, keys, args, rst) == 1)
-		{
-			return rst.ToInt() == 1;
-		}
+		return rst.ToInt() == 1;
 	}
 	return false;
 }

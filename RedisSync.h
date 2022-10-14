@@ -21,18 +21,87 @@ public:
 	bool InitRedis(const std::string& host, unsigned short port, const std::string& auth = "", int index = 0, bool bssl = false);
 	void Close();
 
-	// 命令样式 "set key 123"
-	// 见DoCommand解释
-	bool Command(const std::string& str);
-	bool Command(const std::string& str, RedisResult& rst);
-	bool Command(const char* format, ...);
-	bool Command(RedisResult& rst, const char* format, ...);
-	bool Command(const std::vector<std::string>& strs);
-	bool Command(const std::vector<std::string>& strs, std::vector<RedisResult>& rst);
+	// 返回值见DoCommand解释
+	bool Command(const std::string& cmdname)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname));
+	}
+	bool Command(const std::string& cmdname, RedisResult& rst)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname), rst);
+	}
+
+	template<class T1>
+	bool Command(const std::string& cmdname, const T1& t1)
+	{
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1));
+	}
+	template<class T1>
+	bool Command(const std::string& cmdname, const T1& t1, RedisResult& rst)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1), rst);
+	}
+
+	template<class T1, class T2>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2));
+	}
+	template<class T1, class T2>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, RedisResult& rst)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2), rst);
+	}
+
+	template<class T1, class T2, class T3>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3));
+	}
+	template<class T1, class T2, class T3>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, RedisResult& rst)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3), rst);
+	}
+
+	template<class T1, class T2, class T3, class T4>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4));
+	}
+	template<class T1, class T2, class T3, class T4>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, RedisResult& rst)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4), rst);
+	}
+
+	template<class T1, class T2, class T3, class T4, class T5>
+	bool Command(const std::string& cmdname, const T1& t1, const T1& t2, const T1& t3, const T1& t4, const T1& t5)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5));
+	}
+	template<class T1, class T2, class T3, class T4, class T5>
+	bool Command(const std::string& cmdname, const T1& t1, const T1& t2, const T1& t3, const T1& t4, const T1& t5, RedisResult& rst)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5), rst);
+	}
+
+	template<class T1, class T2, class T3, class T4, class T5, class T6>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5, const T6& t6)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5, t6));
+	}
+	template<class T1, class T2, class T3, class T4, class T5, class T6>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5, const T6& t6, RedisResult& rst)
+	{
+		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5, t6), rst);
+	}
 
 	// 执行命令 等待返回结果
 	// 返回结果只表示协议解析或者网络读取的结果
 	// 命令错误在rst中，结果会返回true
+	bool DoCommand(const RedisCommand& cmd); // 不关心返回值
 	bool DoCommand(const RedisCommand& cmd, RedisResult& rst);
 	bool DoCommand(const std::vector<RedisCommand>& cmds, std::vector<RedisResult>& rst);
 
@@ -152,8 +221,6 @@ private:
 	RedisSync(const RedisSync&) = delete;
 	RedisSync& operator=(const RedisSync&) = delete;
 
-	friend class RedisSyncPipeline;
-
 public:
 	// 辅助类接口 常用命令封装==================================================
 	// 注 ：
@@ -165,7 +232,7 @@ public:
 	//////////////////////////////////////////////////////////////////////////
 	// DEL命令 返回值表示删除的个数
 	int Del(const std::string& key);
-	int Del(const std::vector<std::string>& key);
+	int Dels(const std::vector<std::string>& key);
 
 	// DUMP命令
 	int Dump(const std::string& key, std::string& value);
@@ -659,6 +726,9 @@ public:
 	int ScriptKill();
 	// SCRIPT LOAD命令
 	int ScriptLoad(const std::string& script, std::string& scriptsha1);
+	// 执行脚本
+	int Script(RedisScript& script, const std::vector<std::string>& keys, const std::vector<std::string>& args);
+	int Script(RedisScript& script, const std::vector<std::string>& keys, const std::vector<std::string>& args, RedisResult& rst);
 };
 
 template<class Value>
@@ -683,7 +753,7 @@ int RedisSync::SAdd(const std::string& key, const Value& value)
 	{
 		return rst.ToInt();
 	}
-	LogError("UnKnown Error");
+	RedisLogError("UnKnown Error");
 	return -1;
 }
 
@@ -712,7 +782,7 @@ int RedisSync::SAdds(const std::string& key, const ValueList& values)
 	{
 		return rst.ToInt();
 	}
-	LogError("UnKnown Error");
+	RedisLogError("UnKnown Error");
 	return -1;
 }
 

@@ -39,11 +39,54 @@ public:
 	bool InitRedis(const std::string& host, unsigned short port, const std::string& auth = "", int index = 0, bool bssl = false);
 	void Close();
 
-	// 命令样式 "set key 123"
-	// 见SendCommand解释
-	bool Command(const std::string& str, const CallBack& callback);
-	bool Command(const CallBack& callback, const char* format, ...);
-	bool Command(const std::vector<std::string>& strs, const MultiCallBack& callback);
+	// 见SendCommand的解释
+	bool Command(const std::string& cmdname, const CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return false;
+		return SendCommand(RedisCommand(cmdname), callback);
+	}
+
+	template<class T1>
+	bool Command(const std::string& cmdname, const T1& t1, const CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return false;
+		return SendCommand(RedisCommand(cmdname, t1), callback);
+	}
+
+	template<class T1, class T2>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return false;
+		return SendCommand(RedisCommand(cmdname, t1, t2), callback);
+	}
+
+	template<class T1, class T2, class T3>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return false;
+		return SendCommand(RedisCommand(cmdname, t1, t2, t3), callback);
+	}
+
+	template<class T1, class T2, class T3, class T4>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return false;
+		return SendCommand(RedisCommand(cmdname, t1, t2, t3, t4), callback);
+	}
+
+	template<class T1, class T2, class T3, class T4, class T5>
+	bool Command(const std::string& cmdname, const T1& t1, const T1& t2, const T1& t3, const T1& t4, const T1& t5, const CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return false;
+		return SendCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5), callback);
+	}
+
+	template<class T1, class T2, class T3, class T4, class T5, class T6>
+	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5, const T6& t6, const CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return false;
+		return SendCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5, t6), callback);
+	}
 
 	// 发送命令 不等待结果
 	// 返回结果为true 才会产生回调，否则不会回调

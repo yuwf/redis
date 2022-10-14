@@ -22,9 +22,56 @@ public:
 	void Join();
 
 	// 投递命令
-	// 命令样式 "set key 123"
-	void Command(const std::string& str, const RedisAsync::CallBack& callback = nullptr);
-	void Command(const std::vector<std::string>& strs, const RedisAsync::MultiCallBack& callback = nullptr);
+	void Command(const std::string& cmdname, const RedisAsync::CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return;
+		SendCommand(RedisCommand(cmdname), callback);
+	}
+
+	template<class T1>
+	void Command(const std::string& cmdname, const T1& t1, const RedisAsync::CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return;
+		SendCommand(RedisCommand(cmdname, t1), callback);
+	}
+
+	template<class T1, class T2>
+	void Command(const std::string& cmdname, const T1& t1, const T2& t2, const RedisAsync::CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return;
+		SendCommand(RedisCommand(cmdname, t1, t2), callback);
+	};
+
+	template<class T1, class T2, class T3>
+	void Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const RedisAsync::CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return;
+		SendCommand(RedisCommand(cmdname, t1, t2, t3), callback);
+	};
+
+	template<class T1, class T2, class T3, class T4>
+	void Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const RedisAsync::CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return;
+		SendCommand(RedisCommand(cmdname, t1, t2, t3, t4), callback);
+	};
+
+	template<class T1, class T2, class T3, class T4, class T5>
+	void Command(const std::string& cmdname, const T1& t1, const T1& t2, const T1& t3, const T1& t4, const T1& t5, const RedisAsync::CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return;
+		SendCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5), callback);
+	};
+
+	template<class T1, class T2, class T3, class T4, class T5, class T6>
+	void Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5, const T6& t6, const RedisAsync::CallBack& callback = nullptr)
+	{
+		if (cmdname.empty()) return;
+		SendCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5, t6), callback);
+	}
+
+	void SendCommand(const RedisCommand& cmd, const RedisAsync::CallBack& callback = nullptr);
+	void SendCommand(const std::vector<RedisCommand>& cmds, const RedisAsync::MultiCallBack& callback = nullptr);
 
 private:
 	void Run();

@@ -2,7 +2,6 @@
 #include <stdarg.h>
 #include <boost/array.hpp>
 #include "RedisAsync.h"
-#include "Clock.h"
 
 static std::mutex s_mutexredisasync;
 static std::list<RedisAsync*> s_redisasync;
@@ -17,11 +16,11 @@ RedisAsync::RedisAsync(bool subscribe)
 	, m_sslsocket(m_ioservice, m_context)
 	, m_subscribe(subscribe)
 {
-	std::lock_guard<std::mutex> lock(s_mutexredisasync);
-	s_redisasync.push_back(this);
-
 	m_context.set_default_verify_paths();
 	m_context.set_verify_mode(boost::asio::ssl::verify_none);
+
+	std::lock_guard<std::mutex> lock(s_mutexredisasync);
+	s_redisasync.push_back(this);
 }
 
 RedisAsync::~RedisAsync()
@@ -38,7 +37,7 @@ bool RedisAsync::InitRedis(const std::string& host, unsigned short port, const s
 {
 	if (host.empty())
 	{
-		LogError("RedisAsync ip is empty");
+		RedisLogError("RedisAsync ip is empty");
 		return false;
 	}
 
@@ -107,55 +106,11 @@ void RedisAsync::Close()
 	}
 }
 
-bool RedisAsync::Command(const std::string& str, const CallBack& callback)
-{
-	if (str.empty())
-	{
-		return false;
-	}
-
-	RedisCommand cmd;
-	cmd.FromString(str);
-
-	return SendCommand(cmd, callback);
-}
-
-bool RedisAsync::Command(const CallBack& callback, const char* format, ...)
-{
-	char str[1024] = { 0 };
-	va_list ap;
-	va_start(ap, format);
-	vsnprintf(str, 1024 - 1, format, ap);
-	va_end(ap);
-
-	RedisCommand cmd;
-	cmd.FromString(str);
-
-	return SendCommand(cmd, callback);
-}
-
-bool RedisAsync::Command(const std::vector<std::string>& strs, const MultiCallBack& callback)
-{
-	if (strs.empty())
-	{
-		return false;
-	}
-
-	std::vector<RedisCommand> cmds;
-	for (const auto& it : strs)
-	{
-		cmds.push_back(RedisCommand());
-		cmds.back().FromString(it);
-	}
-
-	return SendCommand(cmds, callback);
-}
-
 bool RedisAsync::SendCommand(const RedisCommand& cmd, const CallBack& callback)
 {
 	if (m_subscribe)
 	{
-		LogError("RedisAsync is SubScribe Object");
+		RedisLogError("RedisAsync is SubScribe Object");
 		return false;
 	}
 
@@ -175,7 +130,7 @@ bool RedisAsync::SendCommand(const std::vector<RedisCommand>& cmds, const MultiC
 {
 	if (m_subscribe)
 	{
-		LogError("RedisAsync is SubScribe Object");
+		RedisLogError("RedisAsync is SubScribe Object");
 		return false;
 	}
 	
@@ -195,7 +150,7 @@ void RedisAsync::UpdateReply()
 {
 	if (m_subscribe)
 	{
-		LogError("RedisAsync is SubScribe Object");
+		RedisLogError("RedisAsync is SubScribe Object");
 		return;
 	}
 	if (!CheckConnect())
@@ -213,6 +168,7 @@ void RedisAsync::UpdateReply()
 		int r = ReadReply(rst);
 		if (r < 0)
 		{
+			RedisLogFatal("RedisAsync ReadReply Fail cmdsize=%d", m_queuecommands.size());
 			Close();
 			return;
 		}
@@ -227,7 +183,7 @@ void RedisAsync::UpdateReply()
 		{
 			if (rst.IsError() && cmdptr->cmd.size() > 0)
 			{
-				LogError("RedisAsync err=%s cmd=%s", cmdptr->rst[0].ToString().c_str(), cmdptr->cmd[0].ToString().c_str());
+				RedisLogFatal("RedisAsync err=%s cmd=%s", cmdptr->rst[0].ToString().c_str(), cmdptr->cmd[0].ToString().c_str());
 			}
 			m_queuecommands.pop_front(); // 先移除 回调中可能会修改m_commands
 			if (m_globalcallback)
@@ -244,7 +200,7 @@ void RedisAsync::UpdateReply()
 			size_t index = cmdptr->rst.size() - 1;
 			if (rst.IsError() && cmdptr->cmd.size() > index)
 			{
-				LogError("RedisAsync err=%s cmd=%s", cmdptr->rst[index].ToString().c_str(), cmdptr->cmd[index].ToString().c_str());
+				RedisLogFatal("RedisAsync err=%s cmd=%s", cmdptr->rst[index].ToString().c_str(), cmdptr->cmd[index].ToString().c_str());
 			}
 			if (cmdptr->cmd.size() == cmdptr->rst.size())
 			{
@@ -261,7 +217,7 @@ void RedisAsync::UpdateReply()
 		}
 		else
 		{
-			LogError("UnKnown Error");
+			RedisLogError("UnKnown Error");
 			break;
 		}
 	} while (true);
@@ -271,7 +227,7 @@ bool RedisAsync::SubScribe(const std::string& channel)
 {
 	if (!m_subscribe)
 	{
-		LogError("RedisAsync not SubScribe Object");
+		RedisLogError("RedisAsync not SubScribe Object");
 		return false;
 	}
 
@@ -292,7 +248,7 @@ bool RedisAsync::UnSubScribe(const std::string& channel)
 {
 	if (!m_subscribe)
 	{
-		LogError("RedisAsync not SubScribe Object");
+		RedisLogError("RedisAsync not SubScribe Object");
 		return false;
 	}
 
@@ -330,7 +286,7 @@ bool RedisAsync::PSubScribe(const std::string& pattern)
 {
 	if (!m_subscribe)
 	{
-		LogError("RedisAsync not SubScribe Object");
+		RedisLogError("RedisAsync not SubScribe Object");
 		return false;
 	}
 
@@ -351,7 +307,7 @@ bool RedisAsync::PUnSubScribe(const std::string& pattern)
 {
 	if (!m_subscribe)
 	{
-		LogError("RedisAsync not SubScribe Object");
+		RedisLogError("RedisAsync not SubScribe Object");
 		return false;
 	}
 
@@ -389,7 +345,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 {
 	if (!m_subscribe)
 	{
-		LogError("RedisAsync not SubScribe Object");
+		RedisLogError("RedisAsync not SubScribe Object");
 		return -1;
 	}
 	if (CheckConnect())
@@ -435,7 +391,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 		// 判断数据类型
 		if (!rst.IsArray())
 		{
-			LogError("UnKnown Error");
+			RedisLogError("UnKnown Error");
 			break;
 		}
 		auto rstarray = rst.ToArray();
@@ -443,7 +399,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 		{
 			if (!rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsString())
 			{
-				LogError("UnKnown Error");
+				RedisLogError("UnKnown Error");
 				return -1;
 			}
 			channel = rstarray[1].ToString();
@@ -455,7 +411,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 		{
 			if (!rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsInt())
 			{
-				LogError("UnKnown Error");
+				RedisLogError("UnKnown Error");
 				break;
 			}
 			std::string channel = rstarray[1].ToString();
@@ -465,11 +421,11 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 			if (it != m_channel.end())
 			{
 				it->second = SubscribeRecv;
-				LogInfo("subscribe channel=%s", channel.c_str());
+				RedisLogInfo("subscribe channel=%s", channel.c_str());
 			}
 			else
 			{
-				LogError("not find local subscribe channel, %s", channel.c_str());
+				RedisLogError("not find local subscribe channel, %s", channel.c_str());
 			}
 		}
 		else if (rstarray[0].ToString() == "unsubscribe")
@@ -480,7 +436,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 			}
 			if (!rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsInt())
 			{
-				LogError("UnKnown Error");
+				RedisLogError("UnKnown Error");
 				break;
 			}
 			std::string channel = rstarray[1].ToString();
@@ -489,19 +445,19 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 			auto it = m_channel.find(channel);
 			if (it != m_channel.end())
 			{
-				LogInfo("unsubscribe channel=%s", channel.c_str());
+				RedisLogInfo("unsubscribe channel=%s", channel.c_str());
 				m_channel.erase(it);
 			}
 			else
 			{
-				LogError("not find local subscribe channel, %s", channel.c_str());
+				RedisLogError("not find local subscribe channel, %s", channel.c_str());
 			}
 		}
 		else if (rstarray[0].ToString() == "psubscribe")
 		{
 			if (!rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsInt())
 			{
-				LogError("UnKnown Error");
+				RedisLogError("UnKnown Error");
 				break;
 			}
 			std::string pattern = rstarray[1].ToString();
@@ -511,11 +467,11 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 			if (it != m_pattern.end())
 			{
 				it->second = SubscribeRecv;
-				LogInfo("psubscribe pattern=%s", pattern.c_str());
+				RedisLogInfo("psubscribe pattern=%s", pattern.c_str());
 			}
 			else
 			{
-				LogError("not find local subscribe pattern, %s", pattern.c_str());
+				RedisLogError("not find local subscribe pattern, %s", pattern.c_str());
 			}
 		}
 		else if (rstarray[0].ToString() == "punsubscribe")
@@ -526,7 +482,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 			}
 			if (!rstarray[0].IsString() || !rstarray[1].IsString() || !rstarray[2].IsInt())
 			{
-				LogError("UnKnown Error");
+				RedisLogError("UnKnown Error");
 				break;
 			}
 			std::string pattern = rstarray[1].ToString();
@@ -535,17 +491,17 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 			auto it = m_pattern.find(pattern);
 			if (it != m_pattern.end())
 			{
-				LogInfo("punsubscribe pattern=%s", pattern.c_str());
+				RedisLogInfo("punsubscribe pattern=%s", pattern.c_str());
 				m_pattern.erase(it);
 			}
 			else
 			{
-				LogError("not find local subscribe pattern, %s", pattern.c_str());
+				RedisLogError("not find local subscribe pattern, %s", pattern.c_str());
 			}
 		}
 		else
 		{
-			LogError("UnKnown Error %s", rstarray[0].ToString().c_str());
+			RedisLogError("UnKnown Error %s", rstarray[0].ToString().c_str());
 			break;
 		}
 
@@ -654,7 +610,7 @@ bool RedisAsync::Connect()
 	boost::asio::ip::tcp::resolver::iterator end_iterator;
 	if (ec || it == end_iterator)
 	{
-		LogError("RedisAsync Valid Redis Address, host=%s port=%d, %s", m_host.c_str(), (int)m_port, ec.message().c_str());
+		RedisLogError("RedisAsync Valid Redis Address, host=%s port=%d, %s", m_host.c_str(), (int)m_port, ec.message().c_str());
 		return false;
 	}
 
@@ -717,7 +673,7 @@ bool RedisAsync::Connect()
 
 	if (!bconnect)
 	{
-		LogError("RedisAsync Connect Fail, host=%s[%s] port=%d, %s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, connect_ec.message().c_str());
+		RedisLogError("RedisAsync Connect Fail, host=%s[%s] port=%d, %s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, connect_ec.message().c_str());
 		return false;
 	}
 
@@ -743,13 +699,13 @@ bool RedisAsync::Connect()
 		RedisResult rst;
 		if (ReadReply(rst) != 1)
 		{
-			LogError("RedisAsync Maybe Not Valid Redis Address, host=%s[%s] port=%d ssl=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_bssl ? "true" : "false");
+			RedisLogError("RedisAsync Maybe Not Valid Redis Address, host=%s[%s] port=%d ssl=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_bssl ? "true" : "false");
 			Close();
 			return false;
 		}
 		if (rst.IsNull() || rst.IsError())
 		{
-			LogError("RedisAsync Auth Error, host=%s[%s] port=%d auth=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_auth.c_str());
+			RedisLogError("RedisAsync Auth Error, host=%s[%s] port=%d auth=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_auth.c_str());
 			Close();
 			return false;
 		}
@@ -771,13 +727,13 @@ bool RedisAsync::Connect()
 		RedisResult rst;
 		if (ReadReply(rst) != 1)
 		{
-			LogError("RedisAsync Maybe Not Valid Redis Address, host=%s[%s] port=%d ssl=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_bssl ? "true" : "false");
+			RedisLogError("RedisAsync Maybe Not Valid Redis Address, host=%s[%s] port=%d ssl=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_bssl ? "true" : "false");
 			Close();
 			return false;
 		}
 		if (rst.IsNull() || rst.IsError())
 		{
-			LogError("RedisAsync Select Error, %d", m_index);
+			RedisLogError("RedisAsync Select Error, %d", m_index);
 			Close();
 			return false;
 		}
@@ -785,7 +741,7 @@ bool RedisAsync::Connect()
 
 	ClearRecvBuff();
 
-	LogInfo("RedisAsync Connect Success, host=%s[%s] port=%d index=%d ssl=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_index, m_bssl ? "true" : "false");
+	RedisLogInfo("RedisAsync Connect Success, host=%s[%s] port=%d index=%d ssl=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_index, m_bssl ? "true" : "false");
 	m_bconnected = true;
 
 	// 设置为非阻塞
@@ -839,7 +795,7 @@ bool RedisAsync::CheckConnect()
 		}
 		else
 		{
-			LogError("RedisAsync Not Connect");
+			RedisLogError("RedisAsync Not Connect");
 			return false;
 		}
 	}
@@ -870,7 +826,7 @@ bool RedisAsync::Send(const RedisCommand& cmd)
 		}
 		if (ec)
 		{
-			LogError("RedisAsync Write Error, %s", ec.message().c_str());
+			RedisLogError("RedisAsync Write Error, %s", ec.message().c_str());
 			return false;
 		}
 		sendsize += size;
@@ -909,7 +865,7 @@ bool RedisAsync::Send(const std::vector<RedisCommand>& cmds)
 		}
 		if (ec)
 		{
-			LogError("RedisAsync Write Error, %s", ec.message().c_str());
+			RedisLogError("RedisAsync Write Error, %s", ec.message().c_str());
 			return false;
 		}
 		sendsize += size;
@@ -969,7 +925,7 @@ int RedisAsync::ReadToCRLF(char** buff, int mindatalen)
 					return 0;
 				}
 			}
-			LogError("RedisAsync Read Error, %s", ec.message().c_str());
+			RedisLogError("RedisAsync Read Error, %s", ec.message().c_str());
 			return -1;
 		}
 		if (size > 0)

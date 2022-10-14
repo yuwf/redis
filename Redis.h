@@ -10,14 +10,23 @@
 #include <map>
 #include <unordered_map>
 #include <sstream>
+#include <algorithm>
 #include <boost/any.hpp>
 
-// 自己的Log定义
-//#include "LLog.h"
-//#define LogError LLOG_ERROR
-//#define LogInfo LLOG_INFO
-#define LogError 
-#define LogInfo 
+// 需要依赖Clock git@github.com:yuwf/clock.git
+#include "Clock.h"
+
+// 需要依赖Locker git@github.com:yuwf/locker.git
+#include "Locker.h"
+
+// 依赖的日志输出，自行定义
+#define RedisLogFatal
+#define RedisLogError
+#define RedisLogInfo
+//#include "LLog.h"  
+//#define RedisLogFatal LLOG_FATAL
+//#define RedisLogError LLOG_ERROR
+//#define RedisLogInfo LLOG_INFO
 
 struct RedisResult;
 class Redis
@@ -136,13 +145,60 @@ private:
 
 struct RedisCommand
 {
-	template<class Value>
-	void Add(const Value& v)
+	RedisCommand()
 	{
-		buff.emplace_back(Redis::to_string(v));
+	}
+	RedisCommand(const std::string& cmdname)
+	{ Add(cmdname); }
+
+	template<class T1>
+	RedisCommand(const std::string& cmdname, const T1& t1)
+	{ Add(cmdname); Add(t1); }
+
+	template<class T1, class T2>
+	RedisCommand(const std::string& cmdname, const T1& t1, const T2& t2)
+	{ Add(cmdname); Add(t1); Add(t2); }
+
+	template<class T1, class T2, class T3>
+	RedisCommand(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3)
+	{ Add(cmdname); Add(t1); Add(t2); Add(t3); }
+
+	template<class T1, class T2, class T3, class T4>
+	RedisCommand(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4)
+	{ Add(cmdname); Add(t1); Add(t2); Add(t3); Add(t4); }
+
+	template<class T1, class T2, class T3, class T4, class T5>
+	RedisCommand(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5)
+	{ Add(cmdname); Add(t1); Add(t2); Add(t3); Add(t4); Add(t5); }
+
+	template<class T1, class T2, class T3, class T4, class T5, class T6>
+	RedisCommand(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5, const T6& t6)
+	{ Add(cmdname); Add(t1); Add(t2); Add(t3); Add(t4); Add(t5); Add(t6); }
+
+	template<class T>
+	void Add(const T& t)
+	{
+		buff.emplace_back(Redis::to_string(t));
+	}
+	template<class T>
+	void Add(const std::vector<T>& t)
+	{
+		for (const auto& it : t)
+		{
+			buff.emplace_back(Redis::to_string(it));
+		}
+	}
+	template<class K, class V>
+	void Add(const std::map<K, V>& t)
+	{
+		for (const auto& it : t)
+		{
+			buff.emplace_back(Redis::to_string(it.first));
+			buff.emplace_back(Redis::to_string(it.second));
+		}
 	}
 
-	// 参数为 "set key 123" 样式
+	// 参数为 "set key 123" 样式, 命令是空格分隔，支持字符串内空格引号安全保护
 	void FromString(const std::string& cmd);
 
 	// 转化为 "set key 123" 样式
@@ -242,39 +298,76 @@ class RedisResultBind
 public:
 	void Bind(int& v)
 	{
-		callback = [&](const RedisResult& rst) { v = rst.ToInt(); };
+		callback = [&](const RedisResult& rst)
+		{
+			if (rst.IsError())
+				return;
+			v = rst.ToInt();
+		};
 	}
 	void Bind(long long& v)
 	{
-		callback = [&](const RedisResult& rst) { v = rst.ToLongLong(); };
+		callback = [&](const RedisResult& rst)
+		{
+			if (rst.IsError())
+				return;
+			v = rst.ToLongLong();
+		};
 	}
 	void Bind(float& v)
 	{
-		callback = [&](const RedisResult& rst) { v = rst.StringToFloat(); };
+		callback = [&](const RedisResult& rst)
+		{
+			if (rst.IsError())
+				return;
+			v = rst.StringToFloat();
+		};
 	}
 	void Bind(double& v)
 	{
-		callback = [&](const RedisResult& rst) { v = rst.StringToDouble(); };
+		callback = [&](const RedisResult& rst)
+		{
+			if (rst.IsError())
+				return;
+			v = rst.StringToDouble();
+		};
 	}
 	void Bind(std::string& v)
 	{
-		callback = [&](const RedisResult& rst) { v = rst.ToString(); };
+		callback = [&](const RedisResult& rst)
+		{
+			if (rst.IsError())
+				return;
+			v = rst.ToString();
+		};
 	}
 	template<class ListType>
 	void BindList(ListType& v)
 	{
-		callback = [&](const RedisResult& rst) { rst.ToArray(v); };
+		callback = [&](const RedisResult& rst)
+		{
+			if (rst.IsError())
+				return;
+			rst.ToArray(v);
+		};
 	}
 	template<class MapType>
 	void BindMap(MapType& v) // 一般针对HGetAll命令
 	{
-		callback = [&](const RedisResult& rst) { rst.ToMap(v); };
+		callback = [&](const RedisResult& rst)
+		{
+			if (rst.IsError())
+				return;
+			rst.ToMap(v);
+		};
 	}
 	template<class MapType>
 	void BindMapList(std::vector<MapType>& v) // 一般针对多个HGetAll命令
 	{
 		callback = [&](const RedisResult& rst)
 		{
+			if (rst.IsError())
+				return;
 			if (!rst.IsArray())
 				return;
 			const std::vector<RedisResult>& ar = rst.ToArray();
@@ -293,6 +386,8 @@ public:
 	{
 		callback = [&](const RedisResult& rst)
 		{
+			if (rst.IsError())
+				return;
 			if (!rst.IsArray())
 				return;
 			const RedisResult::Array& ar = rst.ToArray();
@@ -307,6 +402,8 @@ public:
 	{
 		callback = [&](const RedisResult& rst)
 		{
+			if (rst.IsError())
+				return;
 			if (!rst.IsArray())
 				return;
 			const RedisResult::Array& ar = rst.ToArray();
@@ -321,13 +418,20 @@ public:
 	template<class ObjType>
 	void BindObj(ObjType& v)
 	{
-		callback = [&](const RedisResult& rst) { v.From(rst); };
+		callback = [&](const RedisResult& rst)
+		{
+			if (rst.IsError())
+				return;
+			v.From(rst);
+		};
 	}
 	template<class ObjListType>
 	void BindObjList(ObjListType& v)
 	{
 		callback = [&](const RedisResult& rst)
 		{
+			if (rst.IsError())
+				return;
 			if (!rst.IsArray())
 				return;
 			const RedisResult::Array& ar = rst.ToArray();
@@ -345,6 +449,8 @@ public:
 	{
 		callback = [&](const RedisResult& rst)
 		{
+			if (rst.IsError())
+				return;
 			if (!rst.IsArray())
 				return;
 			const std::vector<RedisResult>& ar = rst.ToArray();
@@ -369,6 +475,8 @@ public:
 	{
 		callback = [&](const RedisResult& rst)
 		{
+			if (rst.IsError())
+				return;
 			if (!rst.IsArray())
 				return;
 			const std::vector<RedisResult>& ar = rst.ToArray();
@@ -403,6 +511,24 @@ public:
 	}
 
 	std::function<void(const RedisResult&)> callback;
+
+	static RedisResultBind& Empty()
+	{
+		static RedisResultBind empty;
+		return empty;
+	}
+};
+
+struct RedisScript
+{
+	RedisScript(const std::string& s)
+		: script(s)
+	{
+	}
+
+	const std::string script;
+	// 考虑多线程安全 使用数组，外部不需要访问
+	char scriptsha1[65] = {0};
 };
 
 #endif

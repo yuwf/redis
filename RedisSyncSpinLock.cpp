@@ -5,10 +5,8 @@
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <boost/uuid/uuid_generators.hpp>
-#include <boost/thread.hpp>
 
 #include "RedisSyncSpinLock.h"
-#include "Clock.h"
 
 static std::string s_redisspinlockuuid = boost::uuids::to_string(boost::uuids::random_generator()());
 
@@ -36,7 +34,7 @@ bool RedisSyncSpinLock::ScopedUnLock(const std::string& key)
 	std::vector<std::string> args;
 	args.push_back(ss.str());		// ARGV[1]
 
-	static const std::string script =
+	static const std::string lua =
 		R"lua(
 			local v = redis.call("GET", KEYS[1])
 			if not v then
@@ -48,10 +46,14 @@ bool RedisSyncSpinLock::ScopedUnLock(const std::string& key)
 			end
 			return 1
 		)lua";
+	static RedisScript script(lua);
 
-	static boost::shared_mutex m; // 保护scriptsha1
-	static std::string scriptsha1;
-	return DoScirpt(keys, args, script, scriptsha1, m);
+	RedisResult rst;
+	if (m_redis.Script(script, keys, args) == 1)
+	{
+		return rst.ToInt() == 1;
+	}
+	return false;
 }
 
 bool RedisSyncSpinLock::RecursiveLock(const std::string& key, unsigned int maxlockmsec)
@@ -66,7 +68,7 @@ bool RedisSyncSpinLock::RecursiveLock(const std::string& key, unsigned int maxlo
 	args.push_back(ss.str());					// ARGV[1]
 	args.push_back(std::to_string(maxlockmsec));	// ARGV[2]
 
-	static const std::string script =
+	static const std::string lua =
 		R"lua(
 			if (redis.call('EXISTS', KEYS[1]) == 0) then
 				redis.call("HMSET", KEYS[1], "l:v", ARGV[1], "l:n", 1)
@@ -85,10 +87,14 @@ bool RedisSyncSpinLock::RecursiveLock(const std::string& key, unsigned int maxlo
 			redis.call("PEXPIRE", KEYS[1], ARGV[2])
 			return 1
 		)lua";
+	static RedisScript script(lua);
 
-	static boost::shared_mutex m; // 保护scriptsha1
-	static std::string scriptsha1;
-	return DoScirpt(keys, args, script, scriptsha1, m);
+	RedisResult rst;
+	if (m_redis.Script(script, keys, args) == 1)
+	{
+		return rst.ToInt() == 1;
+	}
+	return false;
 }
 
 bool RedisSyncSpinLock::RecursiveUnLock(const std::string& key)
@@ -102,7 +108,7 @@ bool RedisSyncSpinLock::RecursiveUnLock(const std::string& key)
 	std::vector<std::string> args;
 	args.push_back(ss.str());		// ARGV[1]
 
-	static const std::string script =
+	static const std::string lua =
 		R"lua(
 			if (redis.call('EXISTS', KEYS[1]) == 0) then
 				return 1
@@ -121,43 +127,12 @@ bool RedisSyncSpinLock::RecursiveUnLock(const std::string& key)
 
 			return 0
 		)lua";
+	static RedisScript script(lua);
 
-	static boost::shared_mutex m; // 保护scriptsha1
-	static std::string scriptsha1;
-	return DoScirpt(keys, args, script, scriptsha1, m);
-}
-
-bool RedisSyncSpinLock::DoScirpt(const std::vector<std::string>& keys, const std::vector<std::string>& args, const std::string& script, std::string& scriptsha1, boost::shared_mutex& m)
-{
+	RedisResult rst;
+	if (m_redis.Script(script, keys, args) == 1)
 	{
-		boost::shared_lock<boost::shared_mutex> l(m);
-		RedisResult rst;
-		if (scriptsha1.empty() || m_redis.Evalsha(scriptsha1, keys, args, rst) == 0)
-		{
-			// 脚本为空或者执行错误,下面执行加载和重试
-		}
-		else
-		{
-			return rst.ToInt() == 1;
-		}
-	}
-
-	// 加载脚本
-	{
-		boost::unique_lock<boost::shared_mutex> l(m);
-		if (m_redis.ScriptLoad(script, scriptsha1) != 1)
-		{
-			return false;
-		}
-	}
-	// 重试
-	{
-		boost::shared_lock<boost::shared_mutex> l(m);
-		RedisResult rst;
-		if (m_redis.Evalsha(scriptsha1, keys, args, rst) == 1)
-		{
-			return rst.ToInt() == 1;
-		}
+		return rst.ToInt() == 1;
 	}
 	return false;
 }
@@ -183,7 +158,7 @@ RedisSyncSpinLocker::RedisSyncSpinLocker(RedisSync& redis, const std::string& ke
 			if (time > waitmsec * 1000) // 
 			{
 				m_failTSC = tsc;
-				LogError("********* %s Lock time more than %d(US) *********", m_key.c_str(), time);
+				RedisLogError("********* %s Lock time more than %d(US) *********", m_key.c_str(), time);
 				break;
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -243,7 +218,7 @@ RedisSpinLockData* RedisSpinLockRecord::Reg(const std::string& key)
 
 	// 先用共享锁 如果存在直接修改
 	{
-		boost::shared_lock<boost::shared_mutex> lock(mutex);
+		READ_LOCK(mutex);
 		auto it = ((const RedisSpinLockDataMap&)records).find(key); // 显示的调用const的find
 		if (it != records.cend())
 		{
@@ -255,7 +230,7 @@ RedisSpinLockData* RedisSpinLockRecord::Reg(const std::string& key)
 	RedisSpinLockData* p = new RedisSpinLockData;
 	// 直接用写锁
 	{
-		boost::unique_lock<boost::shared_mutex> lock(mutex);
+		WRITE_LOCK(mutex);
 		records.insert(std::make_pair(key, p));
 	}
 	return p;
@@ -265,7 +240,7 @@ std::string RedisSpinLockRecord::Snapshot(SnapshotType type, const std::string& 
 {
 	RedisSpinLockDataMap lastdata;
 	{
-		boost::unique_lock<boost::shared_mutex> lock(mutex);
+		READ_LOCK(mutex);
 		lastdata = records;
 	}
 

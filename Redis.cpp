@@ -134,7 +134,7 @@ void RedisCommand::FromString(const std::string& cmd)
 	{
 		if (protect == 1)
 		{
-			if (temp[i] == '\'')
+			if (temp[i] == '\'' && temp[i - 1] != '\\')
 			{
 				temp[i] = '\0';
 				protect = 0;
@@ -143,7 +143,7 @@ void RedisCommand::FromString(const std::string& cmd)
 		}
 		if (protect == 2)
 		{
-			if (temp[i] == '\"')
+			if (temp[i] == '\"' && temp[i - 1] != '\\')
 			{
 				temp[i] = '\0';
 				protect = 0;
@@ -156,13 +156,19 @@ void RedisCommand::FromString(const std::string& cmd)
 		}
 		if (temp[i] == '\'')
 		{
-			protect = 1; // 进入单引号
-			temp[i] = '\0';
+			if (!(i > 0 && temp[i - 1] == '\\'))
+			{
+				protect = 1; // 进入单引号
+				temp[i] = '\0';
+			}
 		}
-		if (temp[i] == '\"')
+		if (temp[i] == '\"' )
 		{
-			protect = 2; // 进入双引号
-			temp[i] = '\0';
+			if (!(i > 0 && temp[i - 1] == '\\'))
+			{
+				protect = 2; // 进入双引号
+				temp[i] = '\0';
+			}
 		}
 	}
 

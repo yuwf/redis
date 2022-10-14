@@ -4,7 +4,6 @@
 // by git@github.com:yuwf/redis.git
 
 #include <unordered_map>
-#include <shared_mutex>
 #include <atomic>
 #include "RedisSync.h"
 
@@ -24,8 +23,6 @@ public:
 
 protected:
 	RedisSync& m_redis;
-
-	bool DoScirpt(const std::vector<std::string>& keys, const std::vector<std::string>& args, const std::string& script, std::string& scriptsha1, boost::shared_mutex& m);
 };
 
 // 自旋锁
@@ -54,18 +51,6 @@ protected:
 // 用于记录统计锁的情况
 struct RedisSpinLockData
 {
-	RedisSpinLockData() {}
-	RedisSpinLockData(const RedisSpinLockData& other)
-		: lockcount(other.lockcount.load())
-		, faillockcount(other.faillockcount.load())
-		, trylockTSC(other.trylockTSC.load())
-		, trylockMaxTSC(other.trylockMaxTSC.load())
-		, lockedTSC(other.lockedTSC.load())
-		, lockedMaxTSC(other.lockedMaxTSC.load())
-		, spincount(other.spincount.load())
-	{
-	}
-
 	std::atomic<int64_t> lockcount = { 0 };		// 加锁次数
 	std::atomic<int64_t> faillockcount = { 0 };
 	std::atomic<int64_t> trylockTSC = { 0 };	// 尝试加锁tsc
@@ -73,41 +58,7 @@ struct RedisSpinLockData
 	std::atomic<int64_t> lockedTSC = { 0 };		// 加锁tsc 针对加锁成功的
 	std::atomic<int64_t> lockedMaxTSC = { 0 };
 	std::atomic<int64_t> spincount = { 0 };		// 自旋锁
-
-	RedisSpinLockData& operator += (const RedisSpinLockData& other)
-	{
-		lockcount += other.lockcount;
-		faillockcount += other.faillockcount;
-		trylockTSC += other.trylockTSC;
-		int64_t maxtsc = other.trylockMaxTSC.load();
-		if (trylockMaxTSC < maxtsc)
-		{
-			trylockMaxTSC = maxtsc;
-		}
-		lockedTSC += other.lockedTSC;
-		maxtsc = other.lockedMaxTSC.load();
-		if (lockedMaxTSC < maxtsc)
-		{
-			lockedMaxTSC = maxtsc;
-		}
-		spincount += other.spincount;
-		return *this;
-	}
-
-	RedisSpinLockData& operator = (const RedisSpinLockData& other)
-	{
-		lockcount = other.lockcount.load();
-		faillockcount = other.faillockcount.load();
-		trylockTSC = other.trylockTSC.load();
-		trylockMaxTSC = other.trylockMaxTSC.load();
-		lockedTSC = other.lockedTSC.load();
-		lockedMaxTSC = other.lockedMaxTSC.load();
-		spincount = other.spincount.load();
-		return *this;
-	}
 };
-
-typedef std::unordered_map<std::string, RedisSpinLockData*> RedisSpinLockDataMap;
 
 class RedisSpinLockRecord
 {
@@ -131,9 +82,9 @@ public:
 	void SetRecord(bool b) { brecord = b; }
 
 protected:
-	friend class RedisSyncSpinLocker;
 	// 记录的测试数据
-	boost::shared_mutex mutex;
+	typedef std::unordered_map<std::string, RedisSpinLockData*> RedisSpinLockDataMap;
+	shared_mutex mutex;
 	RedisSpinLockDataMap records;
 
 	// 是否记录测试数据
