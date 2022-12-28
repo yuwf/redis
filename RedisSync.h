@@ -24,11 +24,13 @@ public:
 	// 返回值见DoCommand解释
 	bool Command(const std::string& cmdname)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname));
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname));
 	}
 	bool Command(const std::string& cmdname, RedisResult& rst)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname), rst);
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname), rst);
 	}
 
 	template<class T1>
@@ -40,62 +42,73 @@ public:
 	template<class T1>
 	bool Command(const std::string& cmdname, const T1& t1, RedisResult& rst)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1), rst);
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1), rst);
 	}
 
 	template<class T1, class T2>
 	bool Command(const std::string& cmdname, const T1& t1, const T2& t2)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2));
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1, t2));
 	}
 	template<class T1, class T2>
 	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, RedisResult& rst)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2), rst);
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1, t2), rst);
 	}
 
 	template<class T1, class T2, class T3>
 	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3));
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3));
 	}
 	template<class T1, class T2, class T3>
 	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, RedisResult& rst)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3), rst);
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3), rst);
 	}
 
 	template<class T1, class T2, class T3, class T4>
 	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4));
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4));
 	}
 	template<class T1, class T2, class T3, class T4>
 	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, RedisResult& rst)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4), rst);
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4), rst);
 	}
 
 	template<class T1, class T2, class T3, class T4, class T5>
 	bool Command(const std::string& cmdname, const T1& t1, const T1& t2, const T1& t3, const T1& t4, const T1& t5)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5));
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5));
 	}
 	template<class T1, class T2, class T3, class T4, class T5>
 	bool Command(const std::string& cmdname, const T1& t1, const T1& t2, const T1& t3, const T1& t4, const T1& t5, RedisResult& rst)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5), rst);
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5), rst);
 	}
 
 	template<class T1, class T2, class T3, class T4, class T5, class T6>
 	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5, const T6& t6)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5, t6));
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5, t6));
 	}
 	template<class T1, class T2, class T3, class T4, class T5, class T6>
 	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5, const T6& t6, RedisResult& rst)
 	{
-		if (cmdname.empty()) return false; return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5, t6), rst);
+		if (cmdname.empty()) return false;
+		return DoCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5, t6), rst);
 	}
 
 	// 执行命令 等待返回结果
@@ -189,6 +202,7 @@ protected:
 	// 数据接受buff
 	std::vector<char> m_recvbuff;
 	int m_recvpos = 0;
+	std::array<char, 2048> m_inbuff;
 
 	// 标记订阅使用，订阅的Redis无法发送其他命令
 	const bool m_subscribe;
@@ -751,7 +765,7 @@ int RedisSync::SAdd(const std::string& key, const Value& value)
 	}
 	if (rst.IsInt())
 	{
-		return rst.ToInt();
+		return rst.Toint();
 	}
 	RedisLogError("UnKnown Error");
 	return -1;
@@ -780,7 +794,7 @@ int RedisSync::SAdds(const std::string& key, const ValueList& values)
 	}
 	if (rst.IsInt())
 	{
-		return rst.ToInt();
+		return rst.Toint();
 	}
 	RedisLogError("UnKnown Error");
 	return -1;

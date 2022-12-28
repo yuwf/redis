@@ -1,6 +1,4 @@
-﻿#include <stdio.h>
-#include <stdarg.h>
-#include <boost/array.hpp>
+﻿#include <mutex>
 #include "RedisAsync.h"
 
 static std::mutex s_mutexredisasync;
@@ -126,6 +124,26 @@ bool RedisAsync::SendCommand(const RedisCommand& cmd, const CallBack& callback)
 	return true;
 }
 
+bool RedisAsync::SendCommand(RedisCommand&& cmd, const CallBack& callback)
+{
+	if (m_subscribe)
+	{
+		RedisLogError("RedisAsync is SubScribe Object");
+		return false;
+	}
+
+	if (!SendAndCheckConnect(cmd))
+	{
+		return false;
+	}
+
+	QueueCmdPtr cmdptr(new QueueCmd(0));
+	cmdptr->cmd.emplace_back(std::forward<RedisCommand>(cmd));
+	cmdptr->callback = callback;
+	m_queuecommands.push_back(cmdptr);
+	return true;
+}
+
 bool RedisAsync::SendCommand(const std::vector<RedisCommand>& cmds, const MultiCallBack& callback)
 {
 	if (m_subscribe)
@@ -153,17 +171,17 @@ void RedisAsync::UpdateReply()
 		RedisLogError("RedisAsync is SubScribe Object");
 		return;
 	}
+	if (m_queuecommands.empty())
+	{
+		return;
+	}
 	if (!CheckConnect())
 	{
 		return;
 	}
-
+	
 	do 
 	{
-		if (m_queuecommands.empty())
-		{
-			return;
-		}
 		RedisResult rst;
 		int r = ReadReply(rst);
 		if (r < 0)
@@ -174,14 +192,14 @@ void RedisAsync::UpdateReply()
 		}
 		else if (r == 0)
 		{
-			return;
+			break;
 		}
 
 		QueueCmdPtr cmdptr = m_queuecommands.front(); // 这里cmdptr要copy 防止下面pop掉
-		cmdptr->rst.emplace_back(rst);
+		cmdptr->rst.emplace_back(std::move(rst)); // 下面rst不能再使用了
 		if (cmdptr->type == 0)
 		{
-			if (rst.IsError() && cmdptr->cmd.size() > 0)
+			if (cmdptr->rst[0].IsError() && cmdptr->cmd.size() > 0)
 			{
 				RedisLogFatal("RedisAsync err=%s cmd=%s", cmdptr->rst[0].ToString().c_str(), cmdptr->cmd[0].ToString().c_str());
 			}
@@ -198,7 +216,7 @@ void RedisAsync::UpdateReply()
 		else if (cmdptr->type == 1)
 		{
 			size_t index = cmdptr->rst.size() - 1;
-			if (rst.IsError() && cmdptr->cmd.size() > index)
+			if (cmdptr->rst[index].IsError() && cmdptr->cmd.size() > index)
 			{
 				RedisLogFatal("RedisAsync err=%s cmd=%s", cmdptr->rst[index].ToString().c_str(), cmdptr->cmd[index].ToString().c_str());
 			}
@@ -220,7 +238,13 @@ void RedisAsync::UpdateReply()
 			RedisLogError("UnKnown Error");
 			break;
 		}
-	} while (true);
+	} while (!m_queuecommands.empty());
+
+	// 收缩下接受数据的buff
+	if (m_recvbuff.size() > 1024)
+	{
+		ResetRecvBuff();
+	}
 }
 
 bool RedisAsync::SubScribe(const std::string& channel)
@@ -415,7 +439,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string channel = rstarray[1].ToString();
-			int rst = rstarray[2].ToInt();
+			int rst = rstarray[2].Toint();
 
 			auto it = m_channel.find(channel);
 			if (it != m_channel.end())
@@ -440,7 +464,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string channel = rstarray[1].ToString();
-			int rst = rstarray[2].ToInt();
+			int rst = rstarray[2].Toint();
 
 			auto it = m_channel.find(channel);
 			if (it != m_channel.end())
@@ -461,7 +485,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string pattern = rstarray[1].ToString();
-			int rst = rstarray[2].ToInt();
+			int rst = rstarray[2].Toint();
 
 			auto it = m_pattern.find(pattern);
 			if (it != m_pattern.end())
@@ -486,7 +510,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string pattern = rstarray[1].ToString();
-			int rst = rstarray[2].ToInt();
+			int rst = rstarray[2].Toint();
 
 			auto it = m_pattern.find(pattern);
 			if (it != m_pattern.end())
@@ -739,10 +763,9 @@ bool RedisAsync::Connect()
 		}
 	}
 
-	ClearRecvBuff();
-
 	RedisLogInfo("RedisAsync Connect Success, host=%s[%s] port=%d index=%d ssl=%s", m_host.c_str(), addr.to_string(ec).c_str(), (int)m_port, m_index, m_bssl ? "true" : "false");
 	m_bconnected = true;
+	ClearRecvBuff();
 
 	// 设置为非阻塞
 	bool non_block(true);
@@ -896,17 +919,16 @@ int RedisAsync::ReadToCRLF(char** buff, int mindatalen)
 			}
 		}
 
-		boost::array<char, 512> inbuff;
 		int64_t begin = TSC();
 		boost::system::error_code ec;
 		size_t size = 0;
 		if (m_bssl)
 		{
-			size = m_sslsocket.read_some(boost::asio::buffer(inbuff), ec);
+			size = m_sslsocket.read_some(boost::asio::buffer(m_inbuff), ec);
 		}
 		else
 		{
-			size = m_socket.read_some(boost::asio::buffer(inbuff), ec);
+			size = m_socket.read_some(boost::asio::buffer(m_inbuff), ec);
 		}
 		int64_t end = TSC();
 		m_recvcost += ((end - begin) / TSCPerUS());
@@ -930,7 +952,7 @@ int RedisAsync::ReadToCRLF(char** buff, int mindatalen)
 		}
 		if (size > 0)
 		{
-			m_recvbuff.insert(m_recvbuff.end(), inbuff.begin(), inbuff.begin() + size);
+			m_recvbuff.insert(m_recvbuff.end(), m_inbuff.begin(), m_inbuff.begin() + size);
 		}
 	} while (true);
 }

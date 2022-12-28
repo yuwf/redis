@@ -1,15 +1,4 @@
-﻿#include <stdio.h>
-#include <stdarg.h>
-#include "Redis.h"
-
-Redis::Redis()
-{
-}
-
-Redis::~Redis()
-{
-
-}
+﻿#include "Redis.h"
 
 int Redis::ReadReply(RedisResult& rst)
 {
@@ -42,19 +31,19 @@ int Redis::_ReadReply(RedisResult& rst)
 	{
 		case '+':
 		{
-			rst.v = std::string(&buff[1], &buff[len]);
+			rst = RedisResult::String(&buff[1], &buff[len]);
 			break;
 		}
 		case '-':
 		{
-			rst.v = std::string(&buff[1], &buff[len]);
-			rst.error = true;
+			rst = RedisResult::String(&buff[1], &buff[len]);
+			rst.SetError(true);
 			break;
 		}
 		case ':':
 		{
 			buff[len] = '\0'; // 修改
-			rst.v = atoll(&buff[1]);
+			rst = atoll(&buff[1]);
 			buff[len] = '\r'; // 恢复
 			break;
 		}
@@ -86,11 +75,11 @@ int Redis::_ReadReply(RedisResult& rst)
 				}
 				if (len == 0)
 				{
-					rst.v = std::string("");
+					rst = RedisResult::String();
 				}
 				else
 				{
-					rst.v = std::string(&buff2[0], strlen);
+					rst = RedisResult::String(&buff2[0], strlen);
 				}
 			}
 			break;
@@ -102,8 +91,7 @@ int Redis::_ReadReply(RedisResult& rst)
 			int size = atoi(p);
 			buff[len] = '\r'; // 恢复
 
-			rst.v = RedisResult::Array();
-			RedisResult::Array* pArray = boost::any_cast<RedisResult::Array >(&rst.v);
+			RedisResult::Array ar;
 			for (int i = 0; i < size; ++i)
 			{
 				RedisResult rst2;
@@ -112,8 +100,9 @@ int Redis::_ReadReply(RedisResult& rst)
 				{
 					return r;
 				}
-				pArray->push_back(rst2);
+				ar.emplace_back(std::move(rst2));
 			}
+			rst = std::move(ar);
 			break;
 		}
 		default:
@@ -192,126 +181,4 @@ std::string RedisCommand::ToString() const
 		ss << (i == 0 ? "" : " ") << buff[i];
 	}
 	return std::move(ss.str());
-}
-
-bool RedisResult::IsError() const
-{
-	return error;
-}
-
-bool RedisResult::IsNull() const
-{
-	return v.empty();
-}
-
-bool RedisResult::IsInt() const
-{
-	return v.type() == typeid(long long);
-}
-
-bool RedisResult::IsString() const
-{
-	return v.type() == typeid(std::string);
-}
-
-bool RedisResult::IsArray() const
-{
-	return v.type() == typeid(Array);
-}
-
-bool RedisResult::IsEmptyArray() const
-{
-	if (v.type() == typeid(Array))
-	{
-		return boost::any_cast<Array>(&v)->empty();
-	}
-	return false;
-}
-
-int RedisResult::ToInt() const
-{
-	if (IsInt())
-	{
-		return (int)boost::any_cast<long long>(v);
-	}
-	if (IsString())
-	{
-		return StringToInt();
-	}
-	return 0;
-}
-
-long long RedisResult::ToLongLong() const
-{
-	if (IsInt())
-	{
-		return boost::any_cast<long long>(v);
-	}
-	if (IsString())
-	{
-		return StringToLongLong();
-	}
-	return 0;
-}
-
-const std::string& RedisResult::ToString() const
-{
-	if (IsString())
-	{
-		return *boost::any_cast<std::string>(&v);
-	}
-	static std::string empty;
-	return empty;
-}
-
-const RedisResult::Array& RedisResult::ToArray() const
-{
-	if (IsArray())
-	{
-		return *boost::any_cast<Array>(&v);
-	}
-	static Array empty;
-	return empty;
-}
-
-void RedisResult::Clear()
-{
-	v.clear();
-	error = false;
-}
-
-int RedisResult::StringToInt() const
-{
-	if (IsString())
-	{
-		return atoi(boost::any_cast<std::string>(v).c_str());
-	}
-	return 0;
-}
-
-long long RedisResult::StringToLongLong() const
-{
-	if (IsString())
-	{
-		return strtoll(boost::any_cast<std::string>(v).c_str(), NULL, 10);
-	}
-	return 0;
-}
-
-float RedisResult::StringToFloat() const
-{
-	if (IsString())
-	{
-		return (float)atof(boost::any_cast<std::string>(v).c_str());
-	}
-	return 0.0f;
-}
-
-double RedisResult::StringToDouble() const
-{
-	if (IsString())
-	{
-		return atof(boost::any_cast<std::string>(v).c_str());
-	}
-	return 0.0f;
 }

@@ -63,7 +63,14 @@ public:
 	RedisResultBind& DoCommand(const RedisCommand& cmd)
 	{
 		m_cmds.push_back(cmd);
-		m_binds.push_back(RedisResultBind());
+		m_binds.emplace_back();
+		return m_binds.back();
+	}
+
+	RedisResultBind& DoCommand(RedisCommand&& cmd)
+	{
+		m_cmds.emplace_back(std::forward<RedisCommand>(cmd));
+		m_binds.emplace_back();
 		return m_binds.back();
 	}
 
@@ -80,8 +87,8 @@ public:
 
 		// 缓存直接move掉 防止下面的回调中出现了异常，导致本缓存的数据没有清除
 		std::vector<RedisCommand> cmds(std::move(m_cmds));
-		std::vector<RedisResultBind> binds(std::move(m_binds));;
-		std::map<int, std::shared_ptr<_RedisResultBind_>> binds2(std::move(m_binds2));;
+		std::vector<RedisResultBind> binds(std::move(m_binds));
+		std::map<int, std::shared_ptr<_RedisResultBind_>> binds2(std::move(m_binds2));
 
 		std::vector<RedisResult> rst_;
 		if (!m_redis.DoCommand(cmds, rst_))
@@ -91,24 +98,24 @@ public:
 		rst.reserve(rst.size() + rst_.size());
 		for (int i = 0; i < rst_.size(); ++i)
 		{
-			rst.push_back(rst_[i]);
+			rst.emplace_back(std::move(rst_[i]));
 			if (binds[i].callback)
 			{
-				binds[i].callback(rst_[i]);
+				binds[i].callback(rst.back());
 			}
 			// 自定义复合命令
 			auto it = binds2.find(i);
 			if (it != binds2.end())
 			{
-				rst.pop_back(); // pop出这个命令 放到复合命令的数组中 复合命令组织完后 将组织的result放到rst中
-				RedisResult::Array* pArray = boost::any_cast<RedisResult::Array>(&(it->second->m_result.v));
-				pArray->push_back(rst_[i]);
+				// 从rst中pop出这个命令 放到复合命令的数组中 复合命令组织完后 将组织的result放到rst中
+				it->second->m_result.emplace_back(std::move(rst.back()));
+				rst.pop_back();
 				if (i == it->second->m_end)
 				{
-					rst.push_back(it->second->m_result);
+					rst.emplace_back(RedisResult(std::move(it->second->m_result)));
 					if (it->second->m_bind.callback)
 					{
-						it->second->m_bind.callback(it->second->m_result);
+						it->second->m_bind.callback(rst.back());
 					}
 				}
 			}
@@ -209,7 +216,7 @@ public:
 		RedisCommand cmd("SCAN", cursor);
 		if (!match.empty()) { cmd.Add("MATCH"); cmd.Add(match); }
 		if (count > 0) { cmd.Add("COUNT"); cmd.Add(count); }
-		return DoCommand(cmd);
+		return DoCommand(std::move(cmd));
 	}
 	
 	// TYPE命令 绑定：string [none、string、list、set、zset、hash]
@@ -262,7 +269,7 @@ public:
 		if (ex != -1) { cmd.Add("EX"); cmd.Add(ex); }
 		else if (px != -1) { cmd.Add("PX"); cmd.Add(px); }
 		if (nx) { cmd.Add("NX"); }
-		return DoCommand(cmd);
+		return DoCommand(std::move(cmd));
 	}
 
 
@@ -397,7 +404,7 @@ public:
 		RedisCommand cmd("HSCAN", key, cursor);
 		if (!match.empty()) { cmd.Add("MATCH"); cmd.Add(match); }
 		if (count > 0) { cmd.Add("COUNT"); cmd.Add(count); }
-		return DoCommand(cmd);
+		return DoCommand(std::move(cmd));
 	}
 	
 
@@ -661,13 +668,9 @@ protected:
 	// 自定义复合命令使用 支持绑定多条命令
 	struct _RedisResultBind_
 	{
-		_RedisResultBind_()
-		{
-			m_result.v = RedisResult::Array();
-		}
 		int m_end = 0;	// 结束为止 对应m_binds下标
 		RedisResultBind m_bind;
-		RedisResult m_result; // 存储符合命令的结果集 数组
+		RedisResult::Array m_result;	// 存储符合命令的结果集 结果组织完就被move了
 	};
 	std::map<int, std::shared_ptr<_RedisResultBind_>> m_binds2; // index对应m_binds下标
 

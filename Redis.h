@@ -3,6 +3,7 @@
 
 // by git@github.com:yuwf/redis.git
 
+#include <stdio.h>
 #include <set>
 #include <string>
 #include <vector>
@@ -11,7 +12,7 @@
 #include <unordered_map>
 #include <sstream>
 #include <algorithm>
-#include <boost/any.hpp>
+#include <array>
 
 // 需要依赖Clock git@github.com:yuwf/clock.git
 #include "Clock.h"
@@ -32,8 +33,11 @@ struct RedisResult;
 class Redis
 {
 protected:
-	Redis();
-	virtual ~Redis();
+	Redis() {}
+	virtual ~Redis() {};
+	// 禁止拷贝
+	Redis(const Redis&) = delete;
+	Redis& operator=(const Redis&) = delete;
 
 	// 该函数通过调用下面的ReadToCRLF获取数据
 	// 注意：ReadToCRLF返回的数据要求ReadReply结束前一直有效
@@ -57,6 +61,10 @@ public:
 	static const std::string& to_string(const std::string& v)
 	{
 		return v;
+	}
+	static std::string&& to_string(std::string&& v)
+	{
+		return std::forward<std::string>(v);
 	}
 	static std::string to_string(const char* v)
 	{
@@ -83,7 +91,7 @@ public:
 		v = (unsigned int)atoi(x.c_str());
 		return v;
 	}
-	static int string_to(const std::string& x, long& v)
+	static long string_to(const std::string& x, long& v)
 	{
 		v = atol(x.c_str());
 		return v;
@@ -121,7 +129,7 @@ public:
 	}
 	template<class TYPE>
 	static void reserve(std::list<TYPE>& v, std::size_t size)
-	{	
+	{
 	}
 	template<class TYPE>
 	static void reserve(std::set<TYPE>& v, std::size_t size)
@@ -136,20 +144,21 @@ public:
 	{
 		v.reserve(size);
 	}
-
-private:
-	// 禁止拷贝
-	Redis(const Redis&) = delete;
-	Redis& operator=(const Redis&) = delete;
 };
 
 struct RedisCommand
 {
 	RedisCommand()
-	{
-	}
+	{}
+
 	RedisCommand(const std::string& cmdname)
 	{ Add(cmdname); }
+
+	RedisCommand(std::string&& cmdname)
+	{ Add(std::forward<std::string>(cmdname)); }
+
+	RedisCommand(const char* cmdname)
+	{ Add(std::string(cmdname)); }
 
 	template<class T1>
 	RedisCommand(const std::string& cmdname, const T1& t1)
@@ -179,6 +188,11 @@ struct RedisCommand
 	void Add(const T& t)
 	{
 		buff.emplace_back(Redis::to_string(t));
+	}
+	template<class T>
+	void Add(T&& t)
+	{
+		buff.emplace_back(Redis::to_string(std::forward<T>(t)));
 	}
 	template<class T>
 	void Add(const std::vector<T>& t)
@@ -223,39 +237,85 @@ protected:
 // Redis结果值对象
 struct RedisResult
 {
+	enum Type { TypeNull, TypeInt, TypeString, TypeArray };
+	typedef long long Int;
+	typedef std::string String;
 	typedef std::vector<RedisResult> Array;
 
-	bool IsError() const;
+	RedisResult() {}
+	RedisResult(const RedisResult& other) { Copy(other); }
+	RedisResult(RedisResult&& other) { Swap(other); }
+	RedisResult(Int value) : type(TypeInt), v(new Int(value)) {}
+	RedisResult(const String& value) : type(TypeString), v(new String(value)) {}
+	RedisResult(String&& value) : type(TypeString), v(new String(static_cast<String&&>(value))) {}
+	RedisResult(const Array& value) : type(TypeArray), v(new Array(value)) {}
+	RedisResult(Array&& value) : type(TypeArray), v(new Array(static_cast<Array&&>(value))) {}
 
-	bool IsNull() const;
-	bool IsInt() const;
-	bool IsString() const;
-	bool IsArray() const;
-	bool IsEmptyArray() const;
+	RedisResult& operator=(const RedisResult& other) { Copy(other); return *this; }
+	RedisResult& operator=(RedisResult&& other) { Swap(other); other.Clear(); return *this; }
+	RedisResult& operator=(Int value) { RedisResult(value).Swap(*this); return *this; }
+	RedisResult& operator=(const String& value) { RedisResult(value).Swap(*this); return *this; }
+	RedisResult& operator=(String&& value) { RedisResult(static_cast<String&&>(value)).Swap(*this); return *this; }
+	RedisResult& operator=(const Array& value) { RedisResult(value).Swap(*this); return *this; }
+	RedisResult& operator=(Array&& value) { RedisResult(static_cast<Array&&>(value)).Swap(*this); return *this; }
 
-	// 若返回值是string类型 次类型也支持ToInt和ToLongLong转换
-	int ToInt() const;
-	long long ToLongLong() const;
-	const std::string& ToString() const;
-	const Array& ToArray() const;
+	~RedisResult() { Clear(); }
 
-	void Clear();
+	void Clear()
+	{
+		if (type == TypeInt) delete (Int*)v;
+		else if (type == TypeString) delete (String*)v;
+		else if (type == TypeArray) delete (Array*)v;
+		error = false;
+		type = TypeNull;
+		v = NULL;
+	}
+
+	void Copy(const RedisResult& other)
+	{
+		Clear();
+		error = other.error;
+		type = other.type;
+		if (type == TypeInt) v = new Int(*(Int*)other.v);
+		else if (type == TypeString) v = new String(*(String*)other.v);
+		else if (type == TypeArray) v = new Array(*(Array*)other.v);
+	}
+
+	void Swap(RedisResult& other)
+	{
+		std::swap(error, other.error);
+		std::swap(type, other.type);
+		std::swap(v, other.v);
+	}
+
+	void SetError(bool b) { error = b; }
+	bool IsError() const { return error; }
+
+	bool IsNull() const { return type == TypeNull; }
+	bool IsInt() const { return type == TypeInt; }
+	bool IsString() const { return type == TypeString; }
+	bool IsArray() const { return type == TypeArray; }
+	bool IsEmptyArray() const { return type == TypeArray ? ToArray().empty() : false; }
+
+	int Toint() const { return (int)ToInt(); }
+	Int ToInt() const { return type == TypeInt ? *(Int*)v : StringToInt(); } // 若返回值是string类型 次类型也支持ToInt转换
+	const String& ToString() const { static String empty; return type == TypeString ? *((String*)v) : empty; }
+	const Array& ToArray() const { static Array empty; return type == TypeArray ? *((Array*)v) : empty; }
 
 	// String类型使用 方便使用
-	int StringToInt() const;
-	long long StringToLongLong() const;
-	float StringToFloat() const;
-	double StringToDouble() const;
+	Int StringToInt() const { return type == TypeString ? strtoll(((String*)v)->c_str(), NULL, 10) : 0; }
+	float StringToFloat() const { return type == TypeString ? (float)atof(((String*)v)->c_str()) : 0.0f; }
+	double StringToDouble() const { return type == TypeString ? atof(((String*)v)->c_str()) : 0.0; }
 
 	// Array中String类型 方便使用
 	template<class ListType>
 	bool ToArray(ListType& values) const
 	{
-		if (!IsArray())
+		if (type != TypeArray)
 			return false;
-		const RedisResult::Array& ar = ToArray();
-		Redis::reserve(values, values.size() + ar.size());
-		for (auto it = ar.begin(); it != ar.end(); ++it)
+		const Array* parr = (Array*)v;
+		Redis::reserve(values, values.size() + parr->size());
+		for (auto it = parr->begin(); it != parr->end(); ++it)
 		{
 			typename ListType::value_type v;
 			Redis::string_to(it->ToString(), v);
@@ -268,16 +328,16 @@ struct RedisResult
 	template<class MapType>
 	bool ToMap(MapType& values) const
 	{
-		if (!IsArray())
+		if (type != TypeArray)
 			return false;
-		const std::vector<RedisResult>& ar = ToArray();
-		Redis::reserve(values, values.size() + ar.size() / 2);
-		for (auto it = ar.begin(); it != ar.end(); it++)
+		const Array* parr = (Array*)v;
+		Redis::reserve(values, values.size() + parr->size() / 2);
+		for (auto it = parr->begin(); it != parr->end(); it++)
 		{
 			typename MapType::key_type key;
 			Redis::string_to(it->ToString(), key);
 			it++;
-			if (it != ar.end())
+			if (it != parr->end())
 			{
 				Redis::string_to(it->ToString(), values[key]);
 			}
@@ -289,8 +349,10 @@ struct RedisResult
 		return true;
 	}
 
-	boost::any v;
+private:
 	bool error = false;
+	Type type = TypeNull;
+	void* v = 0;
 };
 
 class RedisResultBind
@@ -302,7 +364,7 @@ public:
 		{
 			if (rst.IsError())
 				return;
-			v = rst.ToInt();
+			v = rst.Toint();
 		};
 	}
 	void Bind(long long& v)
@@ -311,7 +373,7 @@ public:
 		{
 			if (rst.IsError())
 				return;
-			v = rst.ToLongLong();
+			v = rst.ToInt();
 		};
 	}
 	void Bind(float& v)
@@ -393,7 +455,7 @@ public:
 			const RedisResult::Array& ar = rst.ToArray();
 			if (ar.size() != 2)
 				return;
-			cursor = ar[0].ToInt();
+			cursor = ar[0].Toint();
 			ar[1].ToArray(v);
 		};
 	}
@@ -409,7 +471,7 @@ public:
 			const RedisResult::Array& ar = rst.ToArray();
 			if (ar.size() != 2)
 				return;
-			cursor = ar[0].ToInt();
+			cursor = ar[0].Toint();
 			ar[1].ToMap(v);
 		};
 	}
@@ -521,10 +583,9 @@ public:
 
 struct RedisScript
 {
-	RedisScript(const std::string& s)
-		: script(s)
-	{
-	}
+	RedisScript(const std::string& s) : script(s){}
+	RedisScript(std::string&& s): script(std::forward<std::string>(s)){}
+	RedisScript(const char* s) : script(s) {}
 
 	const std::string script;
 	// 考虑多线程安全 使用数组，外部不需要访问

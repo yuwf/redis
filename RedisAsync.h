@@ -93,6 +93,7 @@ public:
 	// 返回结果只表示是否写入命令列表中
 	// 外层调用UpdateReply来读取结果并回调
 	bool SendCommand(const RedisCommand& cmd, const CallBack& callback);
+	bool SendCommand(RedisCommand&& cmd, const CallBack& callback);
 	bool SendCommand(const std::vector<RedisCommand>& cmds, const MultiCallBack& callback);
 
 	// 接受命令 命令结果回调
@@ -184,6 +185,7 @@ protected:
 	// 数据接受buff
 	std::vector<char> m_recvbuff;
 	int m_recvpos = 0;
+	std::array<char, 2048> m_inbuff;
 
 	std::list<QueueCmdPtr> m_queuecommands;
 	// 命令的全局回调 如果设置了全局回调 命令的回调将不再调用
