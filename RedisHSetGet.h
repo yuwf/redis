@@ -62,7 +62,7 @@ inline void FromRedisString(const std::string& x, std::vector<int>& v)
 }
 
 #define REDIS_H_KV_SET(r, index, elem) kvs[fields[index++]] = ToRedisString(elem);
-#define REDIS_H_KV_GET(r, index, elem) FromRedisString(ar[index++].ToString(),elem);
+#define REDIS_H_KV_GET(r, index, elem) FromRedisString(values[index++],elem);
 
 // 参数为可以转化std::string的seq
 #define REDIS_HFIELD(...) \
@@ -100,13 +100,10 @@ inline void FromRedisString(const std::string& x, std::vector<int>& v)
 #define REDIS_HMGET(...) \
 	bool RedisHMGet(RedisSync& redis, const std::string& key) \
 	{ \
-		RedisResult rst; \
-		if (redis.HMGet(key, RedisHField(), rst) != 1) \
+		std::vector<std::string> values; \
+		if (redis.HMGet(key, RedisHField(), values) != 1) \
 			return false; \
-		if (!rst.IsArray() || rst.IsEmptyArray()) \
-			return false; \
-		const RedisResult::Array& ar = rst.ToArray(); \
-		if (ar.size() != BOOST_PP_SEQ_SIZE(__VA_ARGS__)) \
+		if (values.size() != BOOST_PP_SEQ_SIZE(__VA_ARGS__)) \
 			return false; \
 		Lint index = 0; \
 		BOOST_PP_SEQ_FOR_EACH(REDIS_H_KV_GET, index, __VA_ARGS__); \
@@ -115,25 +112,18 @@ inline void FromRedisString(const std::string& x, std::vector<int>& v)
 	void RedisHMGet(RedisSyncPipeline& pipeline, const std::string& key) \
 	{ \
 		pipeline.HMGet(key, RedisHField()).BindObj(*this); \
-	}
-
-// 参数为结构字段seq ()()()
-// 读取时空的表示不存在
-#define REDIS_FROMHMGET(...) \
-	bool RedisFromHMGet(const RedisResult& rst) \
+	} \
+	bool From(const RedisResult& rst) \
 	{ \
 		if (!rst.IsArray() || rst.IsEmptyArray()) \
 			return false; \
-		const RedisResult::Array& ar = rst.ToArray(); \
-		if (ar.size() != BOOST_PP_SEQ_SIZE(__VA_ARGS__)) \
+		std::vector<std::string> values; \
+		rst.ToArray(values); \
+		if (values.size() != BOOST_PP_SEQ_SIZE(__VA_ARGS__)) \
 			return false; \
 		Lint index = 0; \
 		BOOST_PP_SEQ_FOR_EACH(REDIS_H_KV_GET, index, __VA_ARGS__); \
 		return true; \
-	} \
-	bool From(const RedisResult& rst) \
-	{ \
-		return RedisFromHMGet(rst); \
 	}
 
 #define REDIS_SEQ_FOR(...) REDIS_SEQ_FOR_TAIL(__VA_ARGS__)
@@ -159,8 +149,7 @@ inline void FromRedisString(const std::string& x, std::vector<int>& v)
 #define REDIS_HMSETGET(...) \
 	REDIS_HFIELD(REDIS_SEQ_FOR(REDIS_PAIR_FIRST_A __VA_ARGS__)) \
 	REDIS_HMSET(REDIS_SEQ_FOR(REDIS_PAIR_SECOND_A __VA_ARGS__)) \
-	REDIS_HMGET(REDIS_SEQ_FOR(REDIS_PAIR_SECOND_A __VA_ARGS__)) \
-	REDIS_FROMHMGET(REDIS_SEQ_FOR(REDIS_PAIR_SECOND_A __VA_ARGS__))
+	REDIS_HMGET(REDIS_SEQ_FOR(REDIS_PAIR_SECOND_A __VA_ARGS__))
 
 
 #endif

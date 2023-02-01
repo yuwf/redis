@@ -1,6 +1,7 @@
 ﻿
 #include <chrono>
 #include <thread>
+#include <regex>
 
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -216,10 +217,14 @@ RedisSpinLockData* RedisSpinLockRecord::Reg(const std::string& key)
 		return NULL;
 	}
 
+	//static std::regex reg(R"((?<=[:/{_-])(\d+|[0-9a-zA-Z]{24,})(?=[:/}_-]|$))");
+	static std::regex reg(R"(([:/{_-])(\d+|[0-9a-zA-Z]{24,}))");
+	std::string k = std::regex_replace(key, reg, "*");
+
 	// 先用共享锁 如果存在直接修改
 	{
 		READ_LOCK(mutex);
-		auto it = ((const RedisSpinLockDataMap&)records).find(key); // 显示的调用const的find
+		auto it = ((const RedisSpinLockDataMap&)records).find(k); // 显示的调用const的find
 		if (it != records.cend())
 		{
 			return it->second;
@@ -231,7 +236,7 @@ RedisSpinLockData* RedisSpinLockRecord::Reg(const std::string& key)
 	// 直接用写锁
 	{
 		WRITE_LOCK(mutex);
-		records.insert(std::make_pair(key, p));
+		records.insert(std::make_pair(k, p));
 	}
 	return p;
 }

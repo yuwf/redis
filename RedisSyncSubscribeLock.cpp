@@ -87,7 +87,7 @@ void RedisSyncSubscribeLock::Update()
 				// 删除等待锁
 				std::string waitkey = waitlock.key + ":wait";
 				std::string waitlock_ = m_channel + ":" + waitlock.lockid;
-				m_redis.Command(std::string("ZREM"), waitkey, waitlock_);
+				m_redis.DoCommand(RedisCommand(std::string("ZREM"), waitkey, waitlock_));
 				continue;
 			}
 			if (checkkey.find(waitlock.key) == checkkey.end())

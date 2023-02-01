@@ -21,13 +21,10 @@
 #include "Locker.h"
 
 // 依赖的日志输出，自行定义
-#define RedisLogFatal
-#define RedisLogError
-#define RedisLogInfo
-//#include "LLog.h"  
-//#define RedisLogFatal LLOG_FATAL
-//#define RedisLogError LLOG_ERROR
-//#define RedisLogInfo LLOG_INFO
+#include "LLog.h"  
+#define RedisLogFatal LLOG_FATAL
+#define RedisLogError LLOG_ERROR
+#define RedisLogInfo LLOG_INFO
 
 struct RedisResult;
 class Redis
@@ -79,6 +76,11 @@ public:
 	static std::string& string_to(const std::string& x, std::string& v)
 	{
 		v = x;
+		return v;
+	}
+	static std::string& string_to(std::string&& x, std::string& v)
+	{
+		x.swap(v);
 		return v;
 	}
 	static int string_to(const std::string& x, int& v)
@@ -152,64 +154,164 @@ struct RedisCommand
 	{}
 
 	RedisCommand(const std::string& cmdname)
-	{ Add(cmdname); }
+	{
+		Add(cmdname);
+	}
 
 	RedisCommand(std::string&& cmdname)
-	{ Add(std::forward<std::string>(cmdname)); }
+	{
+		Add(std::forward<std::string>(cmdname));
+	}
 
 	RedisCommand(const char* cmdname)
-	{ Add(std::string(cmdname)); }
+	{
+		Add(std::move(std::string(cmdname)));
+	}
 
-	template<class T1>
-	RedisCommand(const std::string& cmdname, const T1& t1)
-	{ Add(cmdname); Add(t1); }
+	template<class... TYPES>
+	RedisCommand(std::string&& cmdname, const TYPES&... tps)
+	{
+		Add(std::forward<std::string>(cmdname));
+		Add(tps...);
+	}
 
-	template<class T1, class T2>
-	RedisCommand(const std::string& cmdname, const T1& t1, const T2& t2)
-	{ Add(cmdname); Add(t1); Add(t2); }
+	template<class... TYPES>
+	RedisCommand(const std::string& cmdname, const TYPES&... tps)
+	{
+		Add(cmdname);
+		Add(tps...);
+	}
 
-	template<class T1, class T2, class T3>
-	RedisCommand(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3)
-	{ Add(cmdname); Add(t1); Add(t2); Add(t3); }
+	template<class... TYPES>
+	RedisCommand(const std::string& cmdname, TYPES&&... tps)
+	{ Add(cmdname); Add(std::forward<TYPES>(tps)...); }
 
-	template<class T1, class T2, class T3, class T4>
-	RedisCommand(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4)
-	{ Add(cmdname); Add(t1); Add(t2); Add(t3); Add(t4); }
+	template<class... TYPES>
+	RedisCommand(std::string&& cmdname, TYPES&&... tps)
+	{
+		Add(std::forward<std::string>(cmdname));
+		Add(std::forward<TYPES>(tps)...);
+	}
 
-	template<class T1, class T2, class T3, class T4, class T5>
-	RedisCommand(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5)
-	{ Add(cmdname); Add(t1); Add(t2); Add(t3); Add(t4); Add(t5); }
-
-	template<class T1, class T2, class T3, class T4, class T5, class T6>
-	RedisCommand(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5, const T6& t6)
-	{ Add(cmdname); Add(t1); Add(t2); Add(t3); Add(t4); Add(t5); Add(t6); }
-
-	template<class T>
-	void Add(const T& t)
+	template<class TYPE>
+	void Add(const TYPE& t)
 	{
 		buff.emplace_back(Redis::to_string(t));
 	}
-	template<class T>
-	void Add(T&& t)
+
+	template<class TYPE>
+	void Add(TYPE&& t)
 	{
-		buff.emplace_back(Redis::to_string(std::forward<T>(t)));
+		buff.emplace_back(Redis::to_string(std::forward<TYPE>(t)));
 	}
-	template<class T>
-	void Add(const std::vector<T>& t)
+
+	template<class TYPE, class... TYPES>
+	void Add(const TYPE& t, const TYPES&... tps)
+	{
+		Add(t);
+		Add(tps...);
+	}
+
+	template<class TYPE, class... TYPES>
+	void Add(TYPE&& t, TYPES&&... tps)
+	{
+		Add(std::forward<TYPE>(t));
+		Add(std::forward<TYPES>(tps)...);
+	}
+
+	// container
+	template<class TYPE>
+	void Add(const std::vector<TYPE>& t)
 	{
 		for (const auto& it : t)
 		{
 			buff.emplace_back(Redis::to_string(it));
 		}
 	}
-	template<class K, class V>
-	void Add(const std::map<K, V>& t)
+	template<class TYPE>
+	void Add(std::vector<TYPE>&& t)
+	{
+		for (auto&& it : t)
+		{
+			buff.emplace_back(Redis::to_string(std::forward<TYPE>(it)));
+		}
+		t.clear();
+	}
+
+	template<class TYPE>
+	void Add(const std::list<TYPE>& t)
+	{
+		for (const auto& it : t)
+		{
+			buff.emplace_back(Redis::to_string(it));
+		}
+	}
+	template<class TYPE>
+	void Add(std::list<TYPE>&& t)
+	{
+		for (auto&& it : t)
+		{
+			buff.emplace_back(Redis::to_string(std::forward<TYPE>(it)));
+		}
+		t.clear();
+	}
+
+	template<class TYPE>
+	void Add(const std::set<TYPE>& t)
+	{
+		for (const auto& it : t)
+		{
+			buff.emplace_back(Redis::to_string(it));
+		}
+	}
+	template<class TYPE>
+	void Add(std::set<TYPE>&& t)
+	{
+		for (auto&& it : t)
+		{
+			buff.emplace_back(Redis::to_string(it)); // it只读 无法forward
+		}
+		t.clear();
+	}
+
+	template<class KEY, class VALUE>
+	void Add(const std::map<KEY, VALUE>& t)
 	{
 		for (const auto& it : t)
 		{
 			buff.emplace_back(Redis::to_string(it.first));
 			buff.emplace_back(Redis::to_string(it.second));
 		}
+	}
+	template<class KEY, class VALUE>
+	void Add(std::map<KEY, VALUE>&& t)
+	{
+		for (auto&& it : t)
+		{
+			buff.emplace_back(Redis::to_string(it.first));
+			buff.emplace_back(Redis::to_string(std::forward<VALUE>(it.second)));
+		}
+		t.clear();
+	}
+
+	template<class KEY, class VALUE>
+	void Add(const std::unordered_map<KEY, VALUE>& t)
+	{
+		for (const auto& it : t)
+		{
+			buff.emplace_back(Redis::to_string(it.first));
+			buff.emplace_back(Redis::to_string(it.second));
+		}
+	}
+	template<class KEY, class VALUE>
+	void Add(std::unordered_map<KEY, VALUE>&& t)
+	{
+		for (auto&& it : t)
+		{
+			buff.emplace_back(Redis::to_string(it.first));
+			buff.emplace_back(Redis::to_string(std::forward<VALUE>(it.second)));
+		}
+		t.clear();
 	}
 
 	// 参数为 "set key 123" 样式, 命令是空格分隔，支持字符串内空格引号安全保护
@@ -364,6 +466,8 @@ public:
 		{
 			if (rst.IsError())
 				return;
+			if (!(rst.IsInt() || rst.IsString()))
+				return;
 			v = rst.Toint();
 		};
 	}
@@ -372,6 +476,8 @@ public:
 		callback = [&](const RedisResult& rst)
 		{
 			if (rst.IsError())
+				return;
+			if (!(rst.IsInt() || rst.IsString()))
 				return;
 			v = rst.ToInt();
 		};
@@ -382,6 +488,8 @@ public:
 		{
 			if (rst.IsError())
 				return;
+			if (!(rst.IsInt() || rst.IsString()))
+				return;
 			v = rst.StringToFloat();
 		};
 	}
@@ -391,6 +499,8 @@ public:
 		{
 			if (rst.IsError())
 				return;
+			if (!(rst.IsInt() || rst.IsString()))
+				return;
 			v = rst.StringToDouble();
 		};
 	}
@@ -399,6 +509,8 @@ public:
 		callback = [&](const RedisResult& rst)
 		{
 			if (rst.IsError())
+				return;
+			if (!rst.IsString())
 				return;
 			v = rst.ToString();
 		};
@@ -410,6 +522,8 @@ public:
 		{
 			if (rst.IsError())
 				return;
+			if (!rst.IsArray())
+				return;
 			rst.ToArray(v);
 		};
 	}
@@ -419,6 +533,8 @@ public:
 		callback = [&](const RedisResult& rst)
 		{
 			if (rst.IsError())
+				return;
+			if (!rst.IsArray())
 				return;
 			rst.ToMap(v);
 		};
@@ -483,6 +599,8 @@ public:
 		callback = [&](const RedisResult& rst)
 		{
 			if (rst.IsError())
+				return;
+			if (rst.IsNull())
 				return;
 			v.From(rst);
 		};
@@ -581,15 +699,17 @@ public:
 	}
 };
 
+// 使用RedisScript 首次使用需要外部加载script
 struct RedisScript
 {
-	RedisScript(const std::string& s) : script(s){}
-	RedisScript(std::string&& s): script(std::forward<std::string>(s)){}
-	RedisScript(const char* s) : script(s) {}
+	RedisScript(const std::string& s) : script(s), scriptsha1(CalcSha1(script)) {}
+	RedisScript(std::string&& s): script(std::forward<std::string>(s)), scriptsha1(CalcSha1(script)) {}
+	RedisScript(const char* s) : script(s), scriptsha1(CalcSha1(script)) {}
 
 	const std::string script;
-	// 考虑多线程安全 使用数组，外部不需要访问
-	char scriptsha1[65] = {0};
+	const std::string scriptsha1;
+
+	std::string CalcSha1(const std::string& s);
 };
 
 #endif

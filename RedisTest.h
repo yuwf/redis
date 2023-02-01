@@ -5,6 +5,21 @@
 
 #include <assert.h>
 #include "RedisSyncPipeline.h"
+#include "RedisHSetGet.h"
+
+struct StructInfo
+{
+	int userId = 0;
+	int appId = 0;
+	std::string str;
+
+	REDIS_HMSETGET
+	(
+		("uid", userId)
+		("appId", appId)
+		("str", str)
+	);
+};
 
 
 void RedisTest_Sync(RedisSync& redis)
@@ -12,55 +27,74 @@ void RedisTest_Sync(RedisSync& redis)
 	RedisLogInfo("RedisTest_Sync Begin");
 
 	// key命令
-	if (redis.Set("__test_string__", 9527) != 1) { RedisLogError("Set"); return; }
-	
+	redis.Del("__test_key__");
+	if (redis.Set("__test_key__", 9527) != 1) { RedisLogError("Set"); return; }
+
 	int index = redis.Index();
-	if (redis.Move("__test_string__", (index + 1) % 16) != 1) { RedisLogError("Move"); return; }
-	if (!redis.Command("SELECT", (index + 1) % 16)) { RedisLogError("SELECT"); return; }
-	if (redis.Exists("__test_string__") != 1) { RedisLogError("Exists"); return; }
-	if (redis.Move("__test_string__", index) != 1) { RedisLogError("Move"); return; }
-	if (!redis.Command("SELECT", index)) { RedisLogError("SELECT"); return; }
+	if (!redis.DoCommand(RedisCommand("SELECT", (index + 1) % 16))) { RedisLogError("SELECT"); return; }
+	redis.Del("__test_str__test_key__ing__");
+	if (!redis.DoCommand(RedisCommand("SELECT", index))) { RedisLogError("SELECT"); return; }
+	
+	if (redis.Move("__test_key__", (index + 1) % 16) != 1) { RedisLogError("Move"); return; }
+	if (!redis.DoCommand(RedisCommand("SELECT", (index + 1) % 16))) { RedisLogError("SELECT"); return; }
+	if (redis.Exists("__test_key__") != 1) { RedisLogError("Exists"); return; }
+	if (redis.Move("__test_key__", index) != 1) { RedisLogError("Move"); return; }
+	if (!redis.DoCommand(RedisCommand("SELECT", index))) { RedisLogError("SELECT"); return; }
 
 	long long expire = 0;
-	if (redis.TTL("__test_string__", expire) != 1 || expire != -1) { RedisLogError("TTL"); return; }
-	if (redis.Expire("__test_string__", 10000) != 1) { RedisLogError("Expire"); return; }
-	if (redis.PTTL("__test_string__", expire) != 1 || expire <= 0) { RedisLogError("PTTL"); return; }
-	if (redis.Persist("__test_string__") != 1) { RedisLogError("Persist"); return; }
-	if (redis.PTTL("__test_string__", expire) != 1 || expire != -1) { RedisLogError("PTTL"); return; }
+	if (redis.TTL("__test_key__", expire) != 1 || expire != -1) { RedisLogError("TTL"); return; }
+	if (redis.Expire("__test_key__", 10000) != 1) { RedisLogError("Expire"); return; }
+	if (redis.PTTL("__test_key__", expire) != 1 || expire <= 0) { RedisLogError("PTTL"); return; }
+	if (redis.Persist("__test_key__") != 1) { RedisLogError("Persist"); return; }
+	if (redis.PTTL("__test_key__", expire) != 1 || expire != -1) { RedisLogError("PTTL"); return; }
 	
 	std::string randomkey;
 	if (redis.RandomKey(randomkey) != 1 || randomkey.empty()) { RedisLogError("RandomKey"); return; }
-	if (redis.Rename("__test_string__", "__test_set_m_") != 1) { RedisLogError("Rename"); return; }
-	if (redis.RenameNX("__test_set_m_", "__test_string__") != 1) { RedisLogError("RenameNX"); return; }
+	if (redis.Rename("__test_key__", "__test_key_m_") != 1) { RedisLogError("Rename"); return; }
+	if (redis.RenameNX("__test_key_m_", "__test_key__") != 1) { RedisLogError("RenameNX"); return; }
 
 	std::string type;
-	if (redis.Type("__test_string__", type) != 1 || type != "string") { RedisLogError("Type"); return; }
+	if (redis.Type("__test_key__", type) != 1 || type != "string") { RedisLogError("Type"); return; }
 	std::string dump;
-	if (redis.Dump("__test_string__", dump) != 1) { RedisLogError("Dump"); return; }
-	if (redis.Del("__test_string__") != 1) { RedisLogError("Del"); return; }
+	if (redis.Dump("__test_key__", dump) != 1) { RedisLogError("Dump"); return; }
+	if (redis.Del("__test_key__") != 1) { RedisLogError("Del"); return; }
+
+	std::map<std::string, int> scankv = { {"__test_scan_0_", 9527}, {"__test_scan_1_", 9527},{"__test_scan_2_", 9527},{"__test_scan_3_", 9527},{"__test_scan_4_", 9527} };
+	if (redis.MSet(scankv) != 1) { RedisLogError("MSet"); return; }
+	std::vector<std::string> scan;
+	int cursor = 0;
+	do
+	{
+		if (redis.Scan(cursor, "__test_scan_*", 2, cursor, scan) != 1) { RedisLogError("Scan"); return; }
+	} while (cursor != 0);
+	if (scan.size() != 5) { RedisLogError("Scan2"); return; }
+	if (redis.Del(scan) != 5) { RedisLogError("Del"); return; }
 
 	// 字符串命令
+	redis.Del("__test_string__");
 	long long rst = 0;
 	if (redis.Set("__test_string__", 9527) != 1) { RedisLogError("Set"); return; }
 	if (redis.Get("__test_string__", rst) != 1 || rst != 9527) { RedisLogError("Get"); return; }
 	if (redis.Incr("__test_string__", rst) != 1 || rst != 9528) { RedisLogError("Incr"); return; }
-	if (redis.Incrby("__test_string__", 2, rst) != 1 || rst != 9530) { RedisLogError("Incrby"); return; }
+	if (redis.Incrby("__test_string__", (long long)2, rst) != 1 || rst != 9530) { RedisLogError("Incrby"); return; }
 	if (redis.Exists("__test_string__") != 1) { RedisLogError("Exists"); return; }
 	redis.Del("__test_string__");
 
 	std::vector<std::string> msetk = { "__test_mset_1__", "__test_mset_2__", "__test_mset_3__" };
+	redis.Del(msetk);
 	std::map<std::string, int> msetkv = { {"__test_mset_1__", 9527}, {"__test_mset_2__", 9527 }, {"__test_mset_3__", 9527} };
 	if (redis.MSet(msetkv) != 1) { RedisLogError("MSet"); return; }
 	std::vector<int> mgetv;
 	if (redis.MGet(msetk, mgetv) != 1 || mgetv.size() != 3 || mgetv[0] != 9527 || mgetv[1] != 9527 || mgetv[2] != 9527) { RedisLogError("MGet"); return; }
-	redis.Dels(msetk);
+	redis.Del(msetk);
 
 	// dict
+	redis.Del("__test_hset__");
 	if (redis.HSet("__test_hset__", "f", 9527) != 1) { RedisLogError("HSet"); return; }
 	if (redis.HExists("__test_hset__", "f") != 1) { RedisLogError("HExists"); return; }
 	rst = 0;
 	if (redis.HGet("__test_hset__", "f", rst) != 1 || rst != 9527) { RedisLogError("HGet"); return; }
-	if (redis.HIncrby("__test_hset__", "f", 3, rst) != 1 || rst != 9530) { RedisLogError("HIncrby"); return; }
+	if (redis.HIncrby("__test_hset__", "f", (long long)3, rst) != 1 || rst != 9530) { RedisLogError("HIncrby"); return; }
 	if (redis.HExists("__test_hset__", "f") != 1) { RedisLogError("HExists"); return; }
 	if (redis.HDel("__test_hset__", "f") != 1) { RedisLogError("HDel"); return; }
 	redis.Del("__test_hset__");
@@ -82,18 +116,29 @@ void RedisTest_Sync(RedisSync& redis)
 	int hcursor = 0;
 	do 
 	{
-		if (redis.HScan("__test_hset__", 0, "f*", 2, hcursor, hscan) != 1) { RedisLogError("HScan"); return; }
+		if (redis.HScan("__test_hset__", hcursor, "f*", 1, hcursor, hscan) != 1) { RedisLogError("HScan"); return; }
 	} while (hcursor != 0);
 	if (hscan.size() != 3 || hscan["f1"] != 9527 || hscan["f2"] != 9527 || hscan["f3"] != 9527) { RedisLogError("HScan2"); return; }
-	if (redis.HDels("__test_hset__", hsetf) != 3) { RedisLogError("HDels"); return; }
+	if (redis.HDel("__test_hset__", hsetf) != 3) { RedisLogError("HDels"); return; }
 
 	redis.Del("__test_hset__");
+
+	StructInfo info, info2;
+	info.appId = 123;
+	info.userId = 9527;
+	info.str = "hello";
+	redis.Del("__test_structinfo__");
+	info.RedisHMSet(redis, "__test_structinfo__");
+	info2.RedisHMGet(redis, "__test_structinfo__");
+	if (info.appId != info2.appId || info.userId != info2.userId || info.str != info2.str) { RedisLogError("structinfo"); return; }
+	redis.Del("__test_structinfo__");
 
 	// list
 	redis.Del("__test_list__");
 	if (redis.LPush("__test_list__", 9527) != 1) { RedisLogError("LPush"); return; }
 	std::vector<int> listaddv = { 9527,9527,9527 };
-	if (redis.LPushs("__test_list__", listaddv) != 4) { RedisLogError("LPushs"); return; }
+	if (redis.LPushX("__test_list__", listaddv) != 4) { RedisLogError("LPush"); return; }
+	if (redis.LPushX("__test_list_2_", listaddv) != 0) { RedisLogError("LPushX"); return; }
 	if (redis.LLen("__test_list__") != 4) { RedisLogError("LLen"); return; }
 	int listrmv = 0;
 	if (redis.LPop("__test_list__", listrmv) != 1 || listrmv != 9527) { RedisLogError("LPop"); return; }
@@ -101,9 +146,12 @@ void RedisTest_Sync(RedisSync& redis)
 	if (redis.LRange("__test_list__", 0, -1, listv) != 1 || listv.size() != 3 || listv[0] != 9527 || listv[1] != 9527 || listv[2] != 9527) { RedisLogError("LRange"); return; }
 	if (redis.LRem("__test_list__", 2, 9527) != 2) { RedisLogError("LRem"); return; }
 	if (redis.RPush("__test_list__", 9527) != 2) { RedisLogError("RPush"); return; }
-	if (redis.RPushs("__test_list__", listaddv) != 5) { RedisLogError("RPushs"); return; }
-	if (redis.LTrim("__test_list__", 0, 2) != 1) { RedisLogError("LTrim"); return; }
-	if (redis.RPop("__test_list__", listrmv) != 1 || listrmv != 9527) { RedisLogError("RPop"); return; }
+	if (redis.RPushX("__test_list__", listaddv) != 5) { RedisLogError("RPushX"); return; }
+	if (redis.RPushX("__test_list_2_", 123) != 0) { RedisLogError("RPushX"); return; }
+	if (redis.LTrim("__test_list__", 0, 1) != 1) { RedisLogError("LTrim"); return; }
+	if (redis.LSet("__test_list__", 0, "9526") != 1) { RedisLogError("LSet"); return; }
+	if (redis.RPopLPush("__test_list__", "__test_list__", listrmv) != 1 || listrmv != 9527) { RedisLogError("RPopLPush"); return; }
+	if (redis.RPop("__test_list__", listrmv) != 1 || listrmv != 9526) { RedisLogError("RPop"); return; }
 	redis.Del("__test_list__");
 
 	// set
@@ -111,13 +159,13 @@ void RedisTest_Sync(RedisSync& redis)
 	redis.Del("__test_set_1__");
 	if(redis.SAdd("__test_set__", 9527) != 1) { RedisLogError("SAdd"); return; }
 	std::vector<int> setaddv = { 9528,9529,9530 };
-	if (redis.SAdds("__test_set__", setaddv) != 3) { RedisLogError("SAdds"); return; }
+	if (redis.SAdd("__test_set__", setaddv) != 3) { RedisLogError("SAdds"); return; }
 	if (redis.SCard("__test_set__") != 4) { RedisLogError("SCard"); return; }
 	if (redis.SRem("__test_set__", 9527) != 1) { RedisLogError("SRem"); return; }
 	std::vector<int> setv;
 	if (redis.SISMember("__test_set__", 9530) != 1) { RedisLogError("SISMember"); return; }
 	if (redis.SMembers("__test_set__", setv) != 1 || setv.size() != 3 || setv[0] != 9528 || setv[1] != 9529 || setv[2] != 9530) { RedisLogError("SMembers"); return; }
-	if (redis.SAdds("__test_set_1__", setaddv) != 3) { RedisLogError("SAdds"); return; }
+	if (redis.SAdd("__test_set_1__", setaddv) != 3) { RedisLogError("SAdds"); return; }
 	if (redis.SAdd("__test_set__", 9527) != 1) { RedisLogError("SAdd"); return; }
 	std::vector<std::string> setkeys = { "__test_set__", "__test_set_1__" };
 	std::vector<int> setdiff;
@@ -147,13 +195,19 @@ void RedisTest_Pipeline(RedisSync& redis)
 	pipeline.Set("__test_string__", 9527).Bind(strbind); strbind = "";
 	bdo = pipeline.Do();
 	if (!bdo || strbind != "OK"){ RedisLogError("Set"); return; }
-	
+
 	int index = redis.Index();
+	pipeline.DoCommand(RedisCommand("SELECT", (index + 1) % 16));
+	pipeline.Del("__test_string__");
+	pipeline.DoCommand(RedisCommand("SELECT", index));
+	bdo = pipeline.Do();
+	if (!bdo) { RedisLogError("SELECT-----"); return; }
+
 	pipeline.Move("__test_string__", (index + 1) % 16).Bind(ibind); ibind = 0;
 	bdo = pipeline.Do();
 	if (!bdo || ibind != 1) { RedisLogError("Move"); return; }
 
-	pipeline.Command("SELECT", (index + 1) % 16);
+	pipeline.DoCommand(RedisCommand("SELECT", (index + 1) % 16));
 	bdo = pipeline.Do(); 
 	if (!bdo) { RedisLogError("SELECT"); return; }
 
@@ -165,7 +219,7 @@ void RedisTest_Pipeline(RedisSync& redis)
 	bdo = pipeline.Do();
 	if (!bdo || ibind != 1) { RedisLogError("Move"); return; }
 
-	pipeline.Command("SELECT", index);
+	pipeline.DoCommand(RedisCommand("SELECT", index));
 	bdo = pipeline.Do();
 	if (!bdo) { RedisLogError("SELECT"); return; }
 
@@ -249,7 +303,7 @@ void RedisTest_Pipeline(RedisSync& redis)
 	bdo = pipeline.Do();
 	if (!bdo || mgetv.size() != 3 || mgetv[0] != 9527 || mgetv[1] != 9527 || mgetv[2] != 9527) { RedisLogError("MGet"); return; }
 
-	redis.Dels(msetk);
+	redis.Del(msetk);
 
 	// dict
 	pipeline.HSet("__test_hset__", "f", 9527).Bind(ibind); ibind = 0;
@@ -315,7 +369,7 @@ void RedisTest_Pipeline(RedisSync& redis)
 	} while (hcursor != 0);
 	if (hscan.size() != 3 || hscan["f1"] != 9527 || hscan["f2"] != 9527 || hscan["f3"] != 9527) { RedisLogError("HScan2"); return; }
 
-	pipeline.HDels("__test_hset__", hsetf).Bind(ibind); ibind = 0;
+	pipeline.HDel("__test_hset__", hsetf).Bind(ibind); ibind = 0;
 	bdo = pipeline.Do();
 	if (!bdo || ibind != 3) { RedisLogError("HDels"); return; }
 
@@ -330,7 +384,7 @@ void RedisTest_Pipeline(RedisSync& redis)
 	if (!bdo || ibind != 1) { RedisLogError("LPush"); return; }
 
 	std::vector<int> listaddv = { 9527,9527,9527 };
-	pipeline.LPushs("__test_list__", listaddv).Bind(ibind); ibind = 0;
+	pipeline.LPush("__test_list__", listaddv).Bind(ibind); ibind = 0;
 	bdo = pipeline.Do();
 	if (!bdo || ibind != 4) { RedisLogError("LPushs"); return; }
 
@@ -355,17 +409,29 @@ void RedisTest_Pipeline(RedisSync& redis)
 	bdo = pipeline.Do();
 	if (!bdo || ibind != 2) { RedisLogError("RPush"); return; }
 
-	pipeline.RPushs("__test_list__", listaddv).Bind(ibind); ibind = 0;
+	pipeline.RPushX("__test_list__", listaddv).Bind(ibind); ibind = 0;
 	bdo = pipeline.Do();
-	if (!bdo || ibind != 5) { RedisLogError("RPushs"); return; }
+	if (!bdo || ibind != 5) { RedisLogError("RPushX"); return; }
 
-	pipeline.LTrim("__test_list__", 0, 2).Bind(strbind); strbind = "";
+	pipeline.RPushX("__test_list_2_", listaddv).Bind(ibind); ibind = 0;
+	bdo = pipeline.Do();
+	if (!bdo || ibind != 0) { RedisLogError("RPushX2"); return; }
+
+	pipeline.LTrim("__test_list__", 0, 1).Bind(strbind); strbind = "";
 	bdo = pipeline.Do();
 	if (!bdo || strbind != "OK") { RedisLogError("LTrim"); return; }
+
+	pipeline.LSet("__test_list__", 0, "9526").Bind(strbind); strbind = "";
+	bdo = pipeline.Do();
+	if (!bdo || strbind != "OK") { RedisLogError("LSet"); return; }
+
+	pipeline.RPopLPush("__test_list__", "__test_list__").Bind(strbind); strbind = "";
+	bdo = pipeline.Do();
+	if (!bdo || strbind != "9527") { RedisLogError("RPopLPush"); return; }
 	
 	pipeline.RPop("__test_list__").Bind(ibind); ibind = 0;
 	bdo = pipeline.Do();
-	if (!bdo || ibind != 9527) { RedisLogError("RPop"); return; }
+	if (!bdo || ibind != 9526) { RedisLogError("RPop"); return; }
 
 	pipeline.Del("__test_list__");
 
@@ -379,7 +445,7 @@ void RedisTest_Pipeline(RedisSync& redis)
 	if (!bdo || ibind != 1) { RedisLogError("SAdd"); return; }
 
 	std::vector<int> setaddv = { 9528,9529,9530 };
-	pipeline.SAdds("__test_set__", setaddv).Bind(ibind); ibind = 0;
+	pipeline.SAdd("__test_set__", setaddv).Bind(ibind); ibind = 0;
 	bdo = pipeline.Do();
 	if (!bdo || ibind != 3) { RedisLogError("SAdds"); return; }
 
@@ -400,7 +466,7 @@ void RedisTest_Pipeline(RedisSync& redis)
 	bdo = pipeline.Do();
 	if (!bdo || setv.size() != 3 || setv[0] != 9528 || setv[1] != 9529 || setv[2] != 9530) { RedisLogError("SISMember"); return; }
 
-	pipeline.SAdds("__test_set_1__", setaddv);
+	pipeline.SAdd("__test_set_1__", setaddv);
 	pipeline.SAdd("__test_set__", 9527);
 
 	std::vector<std::string> setkeys = { "__test_set__", "__test_set_1__" };
@@ -432,6 +498,9 @@ void RedisTest_Pipeline(RedisSync& redis)
 
 
 	// script
+	pipeline.Del("__test_script__");
+	pipeline.Do();
+
 	const std::string lua =
 		R"lua(
 			local v = redis.call("HGET", KEYS[1], "v")
@@ -444,7 +513,7 @@ void RedisTest_Pipeline(RedisSync& redis)
 			end
 			return 0
 		)lua";
-	RedisScript script(lua);
+	static RedisScript script(lua);
 	std::vector<std::string> keys, args;
 	keys.push_back("__test_script__");
 	args.push_back("9527");

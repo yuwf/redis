@@ -15,14 +15,12 @@
 class RedisAsync : public Redis
 {
 public:
+	// 回调函数 ok只表示命令有没有执行，错误与否需要使用rst来判断
 	typedef std::function<void(bool ok, const RedisResult& rst)> CallBack;
 	typedef std::function<void(bool ok, const std::vector<RedisResult>& rst)> MultiCallBack;
 	// 队列命令
 	struct QueueCmd
 	{
-		QueueCmd(int t) : type(t) {}
-		const int type = 0; // 0单条命令 1多条命令
-
 		// 单条命令放第一个位置
 		std::vector<RedisCommand> cmd;
 		std::vector<RedisResult> rst;
@@ -30,7 +28,6 @@ public:
 		MultiCallBack multicallback = nullptr;
 	};
 	typedef std::shared_ptr<QueueCmd> QueueCmdPtr;
-	typedef std::function<void(bool ok, const QueueCmdPtr& cmdptr)> GlobalCallBack;
 
 public:
 	RedisAsync(bool subscribe = false);
@@ -39,71 +36,45 @@ public:
 	bool InitRedis(const std::string& host, unsigned short port, const std::string& auth = "", int index = 0, bool bssl = false);
 	void Close();
 
-	// 见SendCommand的解释
-	bool Command(const std::string& cmdname, const CallBack& callback = nullptr)
-	{
-		if (cmdname.empty()) return false;
-		return SendCommand(RedisCommand(cmdname), callback);
-	}
-
-	template<class T1>
-	bool Command(const std::string& cmdname, const T1& t1, const CallBack& callback = nullptr)
-	{
-		if (cmdname.empty()) return false;
-		return SendCommand(RedisCommand(cmdname, t1), callback);
-	}
-
-	template<class T1, class T2>
-	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const CallBack& callback = nullptr)
-	{
-		if (cmdname.empty()) return false;
-		return SendCommand(RedisCommand(cmdname, t1, t2), callback);
-	}
-
-	template<class T1, class T2, class T3>
-	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const CallBack& callback = nullptr)
-	{
-		if (cmdname.empty()) return false;
-		return SendCommand(RedisCommand(cmdname, t1, t2, t3), callback);
-	}
-
-	template<class T1, class T2, class T3, class T4>
-	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const CallBack& callback = nullptr)
-	{
-		if (cmdname.empty()) return false;
-		return SendCommand(RedisCommand(cmdname, t1, t2, t3, t4), callback);
-	}
-
-	template<class T1, class T2, class T3, class T4, class T5>
-	bool Command(const std::string& cmdname, const T1& t1, const T1& t2, const T1& t3, const T1& t4, const T1& t5, const CallBack& callback = nullptr)
-	{
-		if (cmdname.empty()) return false;
-		return SendCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5), callback);
-	}
-
-	template<class T1, class T2, class T3, class T4, class T5, class T6>
-	bool Command(const std::string& cmdname, const T1& t1, const T2& t2, const T3& t3, const T4& t4, const T5& t5, const T6& t6, const CallBack& callback = nullptr)
-	{
-		if (cmdname.empty()) return false;
-		return SendCommand(RedisCommand(cmdname, t1, t2, t3, t4, t5, t6), callback);
-	}
-
 	// 发送命令 不等待结果
 	// 返回结果为true 才会产生回调，否则不会回调
 	// 返回结果只表示是否写入命令列表中
 	// 外层调用UpdateReply来读取结果并回调
-	bool SendCommand(const RedisCommand& cmd, const CallBack& callback);
-	bool SendCommand(RedisCommand&& cmd, const CallBack& callback);
-	bool SendCommand(const std::vector<RedisCommand>& cmds, const MultiCallBack& callback);
+	bool SendCommand(const RedisCommand& cmd, const CallBack& callback = nullptr);
+	bool SendCommand(RedisCommand&& cmd, const CallBack& callback = nullptr);
+	bool SendCommand(const std::vector<RedisCommand>& cmds, const MultiCallBack& callback = nullptr);
+	bool SendCommand(std::vector<RedisCommand>&& cmds, const MultiCallBack& callback = nullptr);
+
+	// 执行脚本
+	template<class KeyList, class ArgList>
+	bool Script(const RedisScript& script, const KeyList& keys, const ArgList& args, const CallBack& callback = nullptr)
+	{
+		return SendCommand(RedisCommand("EVALSHA", script.scriptsha1, keys.size(), keys, args), [&, script, keys, args, callback](bool ok, const RedisResult& rst)
+		{
+			if (rst.IsError() && rst.ToString().find("NOSCRIPT ") != std::string::npos) // 如果是脚本不存在的错误
+			{
+				if (!SendCommand(RedisCommand("EVAL", script.script, keys.size(), keys, args), callback)) // 直接执行Eval 他也会加载脚本
+				{
+					if (callback) // 因为是在回调中 需要保证callback的调用
+					{
+						static RedisResult s_result;
+						callback(false, s_result);
+					}
+				}
+			}
+			else
+			{
+				if (callback)
+					callback(ok, rst);
+			}
+		});
+	}
 
 	// 接受命令 命令结果回调
 	void UpdateReply();
 
 	// 命令队列是否为空
 	bool Empty() const { return m_queuecommands.empty(); }
-
-	// 设置全局命令回调，设置了全局命令回调后，各命令的回调将不再调用
-	void SetGlobalCallBack(const GlobalCallBack& callback) { m_globalcallback = callback; }
 
 	// 订阅相关，Redis发生了重连会自动重新订阅之前订阅的频道
 	// SUBSCRIBE 命令
@@ -188,8 +159,6 @@ protected:
 	std::array<char, 2048> m_inbuff;
 
 	std::list<QueueCmdPtr> m_queuecommands;
-	// 命令的全局回调 如果设置了全局回调 命令的回调将不再调用
-	GlobalCallBack m_globalcallback;
 
 	// 标记订阅使用，订阅的Redis无法发送其他命令
 	const bool m_subscribe;

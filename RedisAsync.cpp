@@ -81,25 +81,15 @@ void RedisAsync::Close()
 	temp.swap(m_queuecommands);
 	for (const auto& it : temp)
 	{
-		if (m_globalcallback)
+		if (it->callback)
 		{
-			m_globalcallback(false, it);
+			static RedisResult s_result;
+			it->callback(false, s_result);
 		}
-		else if (it->type == 0)
+		if (it->multicallback)
 		{
-			if (it->callback)
-			{
-				static RedisResult s_result;
-				it->callback(false, s_result);
-			}
-		}
-		else if (it->type == 1)
-		{
-			if (it->multicallback)
-			{
-				static std::vector<RedisResult> s_result;
-				it->multicallback(false, s_result);
-			}
+			static std::vector<RedisResult> s_result;
+			it->multicallback(false, s_result);
 		}
 	}
 }
@@ -117,7 +107,7 @@ bool RedisAsync::SendCommand(const RedisCommand& cmd, const CallBack& callback)
 		return false;
 	}
 
-	QueueCmdPtr cmdptr(new QueueCmd(0));
+	QueueCmdPtr cmdptr(new QueueCmd());
 	cmdptr->cmd.push_back(cmd);
 	cmdptr->callback = callback;
 	m_queuecommands.push_back(cmdptr);
@@ -137,7 +127,7 @@ bool RedisAsync::SendCommand(RedisCommand&& cmd, const CallBack& callback)
 		return false;
 	}
 
-	QueueCmdPtr cmdptr(new QueueCmd(0));
+	QueueCmdPtr cmdptr(new QueueCmd());
 	cmdptr->cmd.emplace_back(std::forward<RedisCommand>(cmd));
 	cmdptr->callback = callback;
 	m_queuecommands.push_back(cmdptr);
@@ -157,8 +147,28 @@ bool RedisAsync::SendCommand(const std::vector<RedisCommand>& cmds, const MultiC
 		return false;
 	}
 
-	QueueCmdPtr cmdptr(new QueueCmd(1));
+	QueueCmdPtr cmdptr(new QueueCmd());
 	cmdptr->cmd = cmds;
+	cmdptr->multicallback = callback;
+	m_queuecommands.push_back(cmdptr);
+	return true;
+}
+
+bool RedisAsync::SendCommand(std::vector<RedisCommand>&& cmds, const MultiCallBack& callback)
+{
+	if (m_subscribe)
+	{
+		RedisLogError("RedisAsync is SubScribe Object");
+		return false;
+	}
+
+	if (!SendAndCheckConnect(cmds))
+	{
+		return false;
+	}
+
+	QueueCmdPtr cmdptr(new QueueCmd());
+	cmdptr->cmd.swap(cmds);
 	cmdptr->multicallback = callback;
 	m_queuecommands.push_back(cmdptr);
 	return true;
@@ -197,46 +207,22 @@ void RedisAsync::UpdateReply()
 
 		QueueCmdPtr cmdptr = m_queuecommands.front(); // 这里cmdptr要copy 防止下面pop掉
 		cmdptr->rst.emplace_back(std::move(rst)); // 下面rst不能再使用了
-		if (cmdptr->type == 0)
+		size_t index = cmdptr->rst.size() - 1;
+		if (cmdptr->rst[index].IsError() && cmdptr->cmd.size() > index)
 		{
-			if (cmdptr->rst[0].IsError() && cmdptr->cmd.size() > 0)
-			{
-				RedisLogFatal("RedisAsync err=%s cmd=%s", cmdptr->rst[0].ToString().c_str(), cmdptr->cmd[0].ToString().c_str());
-			}
-			m_queuecommands.pop_front(); // 先移除 回调中可能会修改m_commands
-			if (m_globalcallback)
-			{
-				m_globalcallback(!cmdptr->rst[0].IsError(), cmdptr);
-			}
-			else if (cmdptr->callback)
-			{
-				cmdptr->callback(!cmdptr->rst[0].IsError(), cmdptr->rst[0]);
-			}
+			RedisLogFatal("RedisAsync err=%s cmd=%s", cmdptr->rst[index].ToString().c_str(), cmdptr->cmd[index].ToString().c_str());
 		}
-		else if (cmdptr->type == 1)
+		if (cmdptr->cmd.size() == cmdptr->rst.size())
 		{
-			size_t index = cmdptr->rst.size() - 1;
-			if (cmdptr->rst[index].IsError() && cmdptr->cmd.size() > index)
+			m_queuecommands.pop_front(); // 先移除
+			if (cmdptr->callback)
 			{
-				RedisLogFatal("RedisAsync err=%s cmd=%s", cmdptr->rst[index].ToString().c_str(), cmdptr->cmd[index].ToString().c_str());
+				cmdptr->callback(true, cmdptr->rst[0]);
 			}
-			if (cmdptr->cmd.size() == cmdptr->rst.size())
+			if (cmdptr->multicallback)
 			{
-				m_queuecommands.pop_front(); // 先移除
-				if (m_globalcallback)
-				{
-					m_globalcallback(true, cmdptr);
-				}
-				else if (cmdptr->multicallback)
-				{
-					cmdptr->multicallback(true, cmdptr->rst);
-				}
+				cmdptr->multicallback(true, cmdptr->rst);
 			}
-		}
-		else
-		{
-			RedisLogError("UnKnown Error");
-			break;
 		}
 	} while (!m_queuecommands.empty());
 

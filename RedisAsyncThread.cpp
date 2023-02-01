@@ -21,31 +21,6 @@ bool RedisAsyncThread::Init(const std::string& host, unsigned short port, const 
 
 	// 开启线程
 	m_thread.reset(new std::thread([this]() { this->Run(); }));
-
-	m_redis.SetGlobalCallBack([this](bool ok, const RedisAsync::QueueCmdPtr& cmdptr)
-	{
-		if (cmdptr && m_dispatch)
-		{
-			m_dispatch([ok, cmdptr]()->void
-			{
-				if (cmdptr->type == 0)
-				{
-					if (cmdptr->callback)
-					{
-						static RedisResult s_result;
-						cmdptr->callback(ok, cmdptr->rst.empty() ? s_result : cmdptr->rst[0]);
-					}
-				}
-				else if (cmdptr->type == 1 && cmdptr->cmd.size() == cmdptr->rst.size())
-				{
-					if (cmdptr->multicallback)
-					{
-						cmdptr->multicallback(ok, cmdptr->rst);
-					}
-				}
-			});
-		}
-	});
 	return true;
 }
 
@@ -63,17 +38,51 @@ void RedisAsyncThread::Join()
 
 void RedisAsyncThread::SendCommand(const RedisCommand& cmd, const RedisAsync::CallBack& callback)
 {
-	auto task = [this, cmd, callback]()
+	RedisAsync::CallBack dispatchcallback; // RedisAsyncThread线程调用，把callback放到m_dispatch的线程中调用
+	if (callback)
 	{
-		if (!m_redis.SendCommand(cmd, callback))
+		dispatchcallback = [this, callback](bool ok, const RedisResult& rst)
 		{
-			if (callback && m_dispatch)
+			if (m_dispatch)
+				m_dispatch([callback, ok, rst]()->void { callback(ok, rst); });
+		};
+	}
+	auto task = [this, cmd, dispatchcallback]()
+	{
+		if (!m_redis.SendCommand(cmd, dispatchcallback))
+		{
+			if (dispatchcallback)
 			{
-				m_dispatch([callback]()->void
-				{
-					static RedisResult s_result;
-					callback(false, s_result);
-				});
+				static RedisResult s_result;
+				dispatchcallback(false, s_result);
+			}
+		}
+	};
+
+	std::lock_guard<std::mutex> lock(m_mutex);
+	m_tasks.push_back(task);
+	m_condition.notify_one();
+}
+
+void RedisAsyncThread::SendCommand(RedisCommand&& cmd, const RedisAsync::CallBack& callback)
+{
+	RedisAsync::CallBack dispatchcallback; // RedisAsyncThread线程调用，把callback放到m_dispatch的线程中调用
+	if (callback)
+	{
+		dispatchcallback = [this, callback](bool ok, const RedisResult& rst)
+		{
+			if (m_dispatch)
+				m_dispatch([callback, ok, rst]()->void { callback(ok, rst); });
+		};
+	}
+	auto task = [this, c = std::forward<RedisCommand>(cmd), dispatchcallback]() mutable
+	{
+		if (!m_redis.SendCommand(std::forward<RedisCommand>(c), dispatchcallback))
+		{
+			if (dispatchcallback)
+			{
+				static RedisResult s_result;
+				dispatchcallback(false, s_result);
 			}
 		}
 	};
@@ -85,29 +94,32 @@ void RedisAsyncThread::SendCommand(const RedisCommand& cmd, const RedisAsync::Ca
 
 void RedisAsyncThread::SendCommand(const std::vector<RedisCommand>& cmds, const RedisAsync::MultiCallBack& callback)
 {
+	RedisAsync::MultiCallBack dispatchcallback; // RedisAsyncThread线程调用，把callback放到m_dispatch的线程中调用
+	if (callback)
+	{
+		dispatchcallback = [this, callback](bool ok, const std::vector<RedisResult>& rst)
+		{
+			if (m_dispatch)
+				m_dispatch([callback, ok, rst]()->void { callback(ok, rst); });
+		};
+	}
 	if (cmds.empty())
 	{
 		RedisLogError("RedisAsyncThread commands is empty");
-		if (callback && m_dispatch)
+		if (dispatchcallback)
 		{
-			m_dispatch([callback]()->void
-			{
-				static std::vector<RedisResult> s_result;
-				callback(false, s_result);
-			});
+			static std::vector<RedisResult> s_result;
+			dispatchcallback(false, s_result);
 		}
 	}
-	auto task = [this, cmds, callback]()
+	auto task = [this, cmds, dispatchcallback]()
 	{
-		if (!m_redis.SendCommand(cmds, callback))
+		if (!m_redis.SendCommand(cmds, dispatchcallback))
 		{
-			if (callback && m_dispatch)
+			if (dispatchcallback)
 			{
-				m_dispatch([callback]()->void
-				{
-					static std::vector<RedisResult> s_result;
-					callback(false, s_result);
-				});
+				static std::vector<RedisResult> s_result;
+				dispatchcallback(false, s_result);
 			}
 		}
 	};
@@ -116,6 +128,44 @@ void RedisAsyncThread::SendCommand(const std::vector<RedisCommand>& cmds, const 
 	m_tasks.push_back(task);
 	m_condition.notify_one();
 }
+
+void RedisAsyncThread::SendCommand(std::vector<RedisCommand>&& cmds, const RedisAsync::MultiCallBack& callback)
+{
+	RedisAsync::MultiCallBack dispatchcallback; // RedisAsyncThread线程调用，把callback放到m_dispatch的线程中调用
+	if (callback)
+	{
+		dispatchcallback = [this, callback](bool ok, const std::vector<RedisResult>& rst)
+		{
+			if (m_dispatch)
+				m_dispatch([callback, ok, rst]()->void { callback(ok, rst); });
+		};
+	}
+	if (cmds.empty())
+	{
+		RedisLogError("RedisAsyncThread commands is empty");
+		if (dispatchcallback)
+		{
+			static std::vector<RedisResult> s_result;
+			dispatchcallback(false, s_result);
+		}
+	}
+	auto task = [this, c = std::forward<std::vector<RedisCommand>>(cmds), dispatchcallback]() mutable
+	{
+		if (!m_redis.SendCommand(std::forward<std::vector<RedisCommand>>(c), dispatchcallback))
+		{
+			if (dispatchcallback)
+			{
+				static std::vector<RedisResult> s_result;
+				dispatchcallback(false, s_result);
+			}
+		}
+	};
+
+	std::lock_guard<std::mutex> lock(m_mutex);
+	m_tasks.push_back(task);
+	m_condition.notify_one();
+}
+
 
 void RedisAsyncThread::Run()
 {
