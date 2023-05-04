@@ -22,10 +22,13 @@
 #include "Locker.h"
 
 // 依赖的日志输出，自行定义
-#include "LLog.h"  
-#define RedisLogFatal LLOG_FATAL
-#define RedisLogError LLOG_ERROR
-#define RedisLogInfo LLOG_INFO
+#define RedisLogFatal
+#define RedisLogError
+#define RedisLogInfo
+//#include "LLog.h"  
+//#define RedisLogFatal LLOG_FATAL
+//#define RedisLogError LLOG_ERROR
+//#define RedisLogInfo LLOG_INFO
 
 struct RedisResult;
 class Redis
