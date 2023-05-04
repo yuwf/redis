@@ -161,7 +161,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("DEL", keys), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -181,45 +181,45 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("EXISTS", key), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
 	// 过期相关命令
 	// EXPIRE 秒
-	int Expire(const std::string& key, long long value)
+	int Expire(const std::string& key, int64_t value)
 	{
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("EXPIRE", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 	// EXPIREAT 秒 时间戳
-	int ExpireAt(const std::string& key, long long value)
+	int ExpireAt(const std::string& key, int64_t value)
 	{
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("EXPIREAT", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 	// PEXPIRE 毫秒
-	int PExpire(const std::string& key, long long value)
+	int PExpire(const std::string& key, int64_t value)
 	{
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("PEXPIRE", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 	// PEXPIREAT 毫秒 时间戳
-	int PExpireAt(const std::string& key, long long value)
+	int PExpireAt(const std::string& key, int64_t value)
 	{
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("PEXPIREAT", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 	// PERSIST
@@ -228,25 +228,25 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("PERSIST", key), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 	// TTL
-	int TTL(const std::string& key, long long& value)
+	int TTL(const std::string& key, int64_t& value)
 	{
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("TTL", key), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { value = rst.ToInt(); return 1; }
+		if (rst.IsInt()) { value = rst.ToInt64(); return 1; }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 	// PTTL
-	int PTTL(const std::string& key, long long& value)
+	int PTTL(const std::string& key, int64_t& value)
 	{
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("PTTL", key), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { value = rst.ToInt(); return 1; }
+		if (rst.IsInt()) { value = rst.ToInt64(); return 1; }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -267,7 +267,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("MOVE", key, index), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.ToInt(); }
+		if (rst.IsInt()) { return rst.ToInt64(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -295,7 +295,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("RENAMENX", key, newkey), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.ToInt(); }
+		if (rst.IsInt()) { return rst.ToInt64(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -313,7 +313,7 @@ public:
 		if (rst.IsArray() && rst.ToArray().size() == 2)
 		{
 			const RedisResult::Array& ar = rst.ToArray();
-			rstcursor = ar[0].Toint();
+			rstcursor = ar[0].ToInt();
 			ar[1].ToArray(values);
 			return 1;
 		}
@@ -347,31 +347,31 @@ public:
 	// INCR命令 svalue表示成功后的值
 	int Incr(const std::string& key)
 	{
-		long long svalue = 0;
+		int64_t svalue = 0;
 		return Incr(key, svalue);
 	}
-	int Incr(const std::string& key, long long& svalue)
+	int Incr(const std::string& key, int64_t& svalue)
 	{
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("INCR", key), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { svalue = rst.ToInt(); return 1; }
+		if (rst.IsInt()) { svalue = rst.ToInt64(); return 1; }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 	
 	// INCRBY命令 svalue表示成功后的值
-	int Incrby(const std::string& key, long long value)
+	int Incrby(const std::string& key, int64_t value)
 	{
-		long long svalue = 0;
-		return Incrby(key, (long long)value, svalue);
+		int64_t svalue = 0;
+		return Incrby(key, value, svalue);
 	}
 	template<class Value>
-	int Incrby(const std::string& key, Value value, long long& svalue)
+	int Incrby(const std::string& key, Value value, int64_t& svalue)
 	{
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("INCRBY", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { svalue = rst.ToInt(); return 1; }
+		if (rst.IsInt()) { svalue = rst.ToInt64(); return 1; }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -422,7 +422,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("HDEL", key, field), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -432,7 +432,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("HEXISTS", key, field), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -466,12 +466,12 @@ public:
 		return HIncrby(key, field, value, svalue);
 	}
 	template<class Field, class Value>
-	int HIncrby(const std::string& key, const Field& field, Value value, long long& svalue)
+	int HIncrby(const std::string& key, const Field& field, Value value, int64_t& svalue)
 	{
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("HINCRBY", key, field, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { svalue = rst.ToInt(); return 1; }
+		if (rst.IsInt()) { svalue = rst.ToInt64(); return 1; }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 	
@@ -492,7 +492,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("HLEN", key), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -525,7 +525,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("HSET", key, field, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -536,7 +536,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("HSETNX", key, field, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -565,7 +565,7 @@ public:
 		if (rst.IsArray() && rst.ToArray().size() == 2)
 		{
 			const RedisResult::Array& ar = rst.ToArray();
-			rstcursor = ar[0].Toint();
+			rstcursor = ar[0].ToInt();
 			ar[1].ToMap(values);
 			return 1;
 		}
@@ -579,7 +579,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("LLEN", key), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -606,7 +606,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("LPUSH", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -617,7 +617,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("LPUSHX", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -639,7 +639,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("LREM", key, count, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -703,7 +703,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("RPUSH", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -714,7 +714,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("RPUSHX", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -726,7 +726,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("SADD", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -736,7 +736,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("SCARD", key), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -771,7 +771,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("SISMEMBER", key, value), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -815,7 +815,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("SREM", key, value), rst)){ return -1;}
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 
@@ -869,7 +869,7 @@ public:
 		RedisResult rst;
 		if (!DoCommand(RedisCommand("SCRIPT", "EXISTS", scriptsha1), rst)) { return -1; }
 		if (rst.IsError() || rst.IsNull()) { return 0; } // 命令错误或者结果为空
-		if (rst.IsInt()) { return rst.Toint(); }
+		if (rst.IsInt()) { return rst.ToInt(); }
 		else { RedisLogError("UnKnown Error"); return -1; }
 	}
 

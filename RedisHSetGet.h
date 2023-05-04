@@ -74,7 +74,7 @@ inline void FromRedisString(const std::string& x, std::vector<int>& v)
 
 // 参数为结构字段seq ()()()
 #define REDIS_HMSET(...) \
-	void RedisHMSet(RedisSync& redis, const std::string& key, long long exp = 0) const \
+	void RedisHMSet(RedisSync& redis, const std::string& key, int64_t exp = 0) const \
 	{ \
 		const std::vector<std::string>& fields = RedisHField(); \
 		std::map<std::string, std::string> kvs; \
@@ -84,7 +84,7 @@ inline void FromRedisString(const std::string& x, std::vector<int>& v)
 		if ( exp > 0 ) \
 			redis.Expire(key, exp); \
 	}\
-	void RedisHMSet(RedisSyncPipeline& pipeline, const std::string& key, long long exp = 0) const \
+	void RedisHMSet(RedisSyncPipeline& pipeline, const std::string& key, int64_t exp = 0) const \
 	{ \
 		const std::vector<std::string>& fields = RedisHField(); \
 		std::map<std::string, std::string> kvs; \

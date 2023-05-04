@@ -52,7 +52,7 @@ bool RedisSyncSpinLock::ScopedUnLock(const std::string& key)
 	RedisResult rst;
 	if (m_redis.Script(script, keys, args) == 1)
 	{
-		return rst.ToInt() == 1;
+		return rst.ToInt64() == 1;
 	}
 	return false;
 }
@@ -93,7 +93,7 @@ bool RedisSyncSpinLock::RecursiveLock(const std::string& key, unsigned int maxlo
 	RedisResult rst;
 	if (m_redis.Script(script, keys, args) == 1)
 	{
-		return rst.ToInt() == 1;
+		return rst.ToInt64() == 1;
 	}
 	return false;
 }
@@ -133,7 +133,7 @@ bool RedisSyncSpinLock::RecursiveUnLock(const std::string& key)
 	RedisResult rst;
 	if (m_redis.Script(script, keys, args) == 1)
 	{
-		return rst.ToInt() == 1;
+		return rst.ToInt64() == 1;
 	}
 	return false;
 }

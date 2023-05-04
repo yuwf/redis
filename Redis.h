@@ -4,6 +4,7 @@
 // by git@github.com:yuwf/redis.git
 
 #include <stdio.h>
+#include <stdint.h>
 #include <set>
 #include <string>
 #include <vector>
@@ -93,24 +94,14 @@ public:
 		v = (unsigned int)atoi(x.c_str());
 		return v;
 	}
-	static long string_to(const std::string& x, long& v)
+	static int64_t string_to(const std::string& x, int64_t& v)
 	{
-		v = atol(x.c_str());
+		v = (int64_t)strtoll(x.c_str(), NULL, 10);
 		return v;
 	}
-	static unsigned long string_to(const std::string& x, unsigned long& v)
+	static uint64_t string_to(const std::string& x, uint64_t& v)
 	{
-		v = (unsigned long)atol(x.c_str());
-		return v;
-	}
-	static long long string_to(const std::string& x, long long& v)
-	{
-		v = strtoll(x.c_str(), NULL, 10);
-		return v;
-	}
-	static unsigned long long string_to(const std::string& x, unsigned long long& v)
-	{
-		v = (unsigned long long)strtoll(x.c_str(), NULL, 10);
+		v = (uint64_t)strtoull(x.c_str(), NULL, 10);
 		return v;
 	}
 	static float string_to(const std::string& x, float& v)
@@ -340,24 +331,22 @@ protected:
 struct RedisResult
 {
 	enum Type { TypeNull, TypeInt, TypeString, TypeArray };
-	typedef long long Int;
-	typedef std::string String;
 	typedef std::vector<RedisResult> Array;
 
 	RedisResult() {}
 	RedisResult(const RedisResult& other) { Copy(other); }
 	RedisResult(RedisResult&& other) { Swap(other); }
-	RedisResult(Int value) : type(TypeInt), v(new Int(value)) {}
-	RedisResult(const String& value) : type(TypeString), v(new String(value)) {}
-	RedisResult(String&& value) : type(TypeString), v(new String(static_cast<String&&>(value))) {}
+	RedisResult(int64_t value) : type(TypeInt), v(new int64_t(value)) {}
+	RedisResult(const std::string& value) : type(TypeString), v(new std::string(value)) {}
+	RedisResult(std::string&& value) : type(TypeString), v(new std::string(static_cast<std::string&&>(value))) {}
 	RedisResult(const Array& value) : type(TypeArray), v(new Array(value)) {}
 	RedisResult(Array&& value) : type(TypeArray), v(new Array(static_cast<Array&&>(value))) {}
 
 	RedisResult& operator=(const RedisResult& other) { Copy(other); return *this; }
 	RedisResult& operator=(RedisResult&& other) { Swap(other); other.Clear(); return *this; }
-	RedisResult& operator=(Int value) { RedisResult(value).Swap(*this); return *this; }
-	RedisResult& operator=(const String& value) { RedisResult(value).Swap(*this); return *this; }
-	RedisResult& operator=(String&& value) { RedisResult(static_cast<String&&>(value)).Swap(*this); return *this; }
+	RedisResult& operator=(int64_t value) { RedisResult(value).Swap(*this); return *this; }
+	RedisResult& operator=(const std::string& value) { RedisResult(value).Swap(*this); return *this; }
+	RedisResult& operator=(std::string&& value) { RedisResult(static_cast<std::string&&>(value)).Swap(*this); return *this; }
 	RedisResult& operator=(const Array& value) { RedisResult(value).Swap(*this); return *this; }
 	RedisResult& operator=(Array&& value) { RedisResult(static_cast<Array&&>(value)).Swap(*this); return *this; }
 
@@ -365,8 +354,8 @@ struct RedisResult
 
 	void Clear()
 	{
-		if (type == TypeInt) delete (Int*)v;
-		else if (type == TypeString) delete (String*)v;
+		if (type == TypeInt) delete (int64_t*)v;
+		else if (type == TypeString) delete (std::string*)v;
 		else if (type == TypeArray) delete (Array*)v;
 		error = false;
 		type = TypeNull;
@@ -378,8 +367,8 @@ struct RedisResult
 		Clear();
 		error = other.error;
 		type = other.type;
-		if (type == TypeInt) v = new Int(*(Int*)other.v);
-		else if (type == TypeString) v = new String(*(String*)other.v);
+		if (type == TypeInt) v = new int64_t(*(int64_t*)other.v);
+		else if (type == TypeString) v = new std::string(*(std::string*)other.v);
 		else if (type == TypeArray) v = new Array(*(Array*)other.v);
 	}
 
@@ -399,15 +388,16 @@ struct RedisResult
 	bool IsArray() const { return type == TypeArray; }
 	bool IsEmptyArray() const { return type == TypeArray ? ToArray().empty() : false; }
 
-	int Toint() const { return (int)ToInt(); }
-	Int ToInt() const { return type == TypeInt ? *(Int*)v : StringToInt(); } // 若返回值是string类型 次类型也支持ToInt转换
-	const String& ToString() const { static String empty; return type == TypeString ? *((String*)v) : empty; }
+	int ToInt() const { return (int)ToInt64(); }
+	int64_t ToInt64() const { return type == TypeInt ? *(int64_t*)v : StringToInt64(); } // 若返回值是string类型 次类型也支持ToInt转换
+	const std::string& ToString() const { static std::string empty; return type == TypeString ? *((std::string*)v) : empty; }
 	const Array& ToArray() const { static Array empty; return type == TypeArray ? *((Array*)v) : empty; }
 
 	// String类型使用 方便使用
-	Int StringToInt() const { return type == TypeString ? strtoll(((String*)v)->c_str(), NULL, 10) : 0; }
-	float StringToFloat() const { return type == TypeString ? (float)atof(((String*)v)->c_str()) : 0.0f; }
-	double StringToDouble() const { return type == TypeString ? atof(((String*)v)->c_str()) : 0.0; }
+	int StringToInt() const { return (int)StringToInt64(); }
+	int64_t StringToInt64() const { return type == TypeString ? (int64_t)strtoll(((std::string*)v)->c_str(), NULL, 10) : 0; }
+	float StringToFloat() const { return type == TypeString ? (float)atof(((std::string*)v)->c_str()) : 0.0f; }
+	double StringToDouble() const { return type == TypeString ? atof(((std::string*)v)->c_str()) : 0.0; }
 
 	// Array中String类型 方便使用
 	template<class ListType>
@@ -468,10 +458,10 @@ public:
 				return;
 			if (!(rst.IsInt() || rst.IsString()))
 				return;
-			v = rst.Toint();
+			v = rst.ToInt();
 		};
 	}
-	void Bind(long long& v)
+	void Bind(int64_t& v)
 	{
 		callback = [&](const RedisResult& rst)
 		{
@@ -479,7 +469,7 @@ public:
 				return;
 			if (!(rst.IsInt() || rst.IsString()))
 				return;
-			v = rst.ToInt();
+			v = rst.ToInt64();
 		};
 	}
 	void Bind(float& v)
@@ -571,7 +561,7 @@ public:
 			const RedisResult::Array& ar = rst.ToArray();
 			if (ar.size() != 2)
 				return;
-			cursor = ar[0].Toint();
+			cursor = ar[0].ToInt();
 			ar[1].ToArray(v);
 		};
 	}
@@ -587,7 +577,7 @@ public:
 			const RedisResult::Array& ar = rst.ToArray();
 			if (ar.size() != 2)
 				return;
-			cursor = ar[0].Toint();
+			cursor = ar[0].ToInt();
 			ar[1].ToMap(v);
 		};
 	}

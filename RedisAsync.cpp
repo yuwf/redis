@@ -425,7 +425,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string channel = rstarray[1].ToString();
-			int rst = rstarray[2].Toint();
+			int rst = rstarray[2].ToInt();
 
 			auto it = m_channel.find(channel);
 			if (it != m_channel.end())
@@ -450,7 +450,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string channel = rstarray[1].ToString();
-			int rst = rstarray[2].Toint();
+			int rst = rstarray[2].ToInt();
 
 			auto it = m_channel.find(channel);
 			if (it != m_channel.end())
@@ -471,7 +471,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string pattern = rstarray[1].ToString();
-			int rst = rstarray[2].Toint();
+			int rst = rstarray[2].ToInt();
 
 			auto it = m_pattern.find(pattern);
 			if (it != m_pattern.end())
@@ -496,7 +496,7 @@ int RedisAsync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string pattern = rstarray[1].ToString();
-			int rst = rstarray[2].Toint();
+			int rst = rstarray[2].ToInt();
 
 			auto it = m_pattern.find(pattern);
 			if (it != m_pattern.end())

@@ -180,7 +180,7 @@ bool RedisSyncSubscribeLock::ScopedLock(const std::string& key, const std::strin
 	RedisResult rst;
 	if (m_redis.Script(script, keys, args) == 1)
 	{
-		return rst.ToInt() == 1;
+		return rst.ToInt64() == 1;
 	}
 	return false;
 }
@@ -226,7 +226,7 @@ bool RedisSyncSubscribeLock::ScopedCheckLock(const std::string& key)
 	RedisResult rst;
 	if (m_redis.Script(script, keys, args) == 1)
 	{
-		return rst.ToInt() == 1;
+		return rst.ToInt64() == 1;
 	}
 	return false;
 }
@@ -280,7 +280,7 @@ bool RedisSyncSubscribeLock::ScopedUnLock(const std::string& key, const std::str
 	RedisResult rst;
 	if (m_redis.Script(script, keys, args) == 1)
 	{
-		return rst.ToInt() == 1;
+		return rst.ToInt64() == 1;
 	}
 	return false;
 }

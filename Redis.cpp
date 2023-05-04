@@ -31,12 +31,12 @@ int Redis::_ReadReply(RedisResult& rst)
 	{
 		case '+':
 		{
-			rst = RedisResult::String(&buff[1], &buff[len]);
+			rst = std::string(&buff[1], &buff[len]);
 			break;
 		}
 		case '-':
 		{
-			rst = RedisResult::String(&buff[1], &buff[len]);
+			rst = std::string(&buff[1], &buff[len]);
 			rst.SetError(true);
 			break;
 		}
@@ -75,11 +75,11 @@ int Redis::_ReadReply(RedisResult& rst)
 				}
 				if (len == 0)
 				{
-					rst = RedisResult::String();
+					rst = std::string();
 				}
 				else
 				{
-					rst = RedisResult::String(&buff2[0], strlen);
+					rst = std::string(&buff2[0], strlen);
 				}
 			}
 			break;

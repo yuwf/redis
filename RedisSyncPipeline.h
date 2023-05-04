@@ -95,19 +95,19 @@ public:
 	}
 
 	// EXPIRE 绑定：int 1成功 0失败
-	RedisResultBind& Expire(const std::string& key, long long value)
+	RedisResultBind& Expire(const std::string& key, int64_t value)
 	{
 		return DoCommand(RedisCommand("EXPIRE", key, value));
 	}
-	RedisResultBind& ExpireAt(const std::string& key, long long value)
+	RedisResultBind& ExpireAt(const std::string& key, int64_t value)
 	{
 		return DoCommand(RedisCommand("EXPIREAT", key, value));
 	}
-	RedisResultBind& PExpire(const std::string& key, long long value)
+	RedisResultBind& PExpire(const std::string& key, int64_t value)
 	{
 		return DoCommand(RedisCommand("PEXPIRE", key, value));
 	}
-	RedisResultBind& PExpireAt(const std::string& key, long long value)
+	RedisResultBind& PExpireAt(const std::string& key, int64_t value)
 	{
 		return DoCommand(RedisCommand("PEXPIREAT", key, value));
 	}
@@ -117,7 +117,7 @@ public:
 		return DoCommand(RedisCommand("PERSIST", key));
 	}
 
-	// TTL命令 绑定：long long 剩余的过期时间
+	// TTL命令 绑定：int64_t 剩余的过期时间
 	RedisResultBind& TTL(const std::string& key)
 	{
 		return DoCommand(RedisCommand("TTL", key));

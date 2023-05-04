@@ -420,7 +420,7 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string channel = rstarray[1].ToString();
-			int rst = rstarray[2].Toint();
+			int rst = rstarray[2].ToInt();
 
 			auto it = m_channel.find(channel);
 			if (it != m_channel.end())
@@ -445,7 +445,7 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string channel = rstarray[1].ToString();
-			int rst = rstarray[2].Toint();
+			int rst = rstarray[2].ToInt();
 
 			auto it = m_channel.find(channel);
 			if (it != m_channel.end())
@@ -466,7 +466,7 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string pattern = rstarray[1].ToString();
-			int rst = rstarray[2].Toint();
+			int rst = rstarray[2].ToInt();
 
 			auto it = m_pattern.find(pattern);
 			if (it != m_pattern.end())
@@ -491,7 +491,7 @@ int RedisSync::Message(std::string& channel, std::string& msg, bool block)
 				break;
 			}
 			std::string pattern = rstarray[1].ToString();
-			int rst = rstarray[2].Toint();
+			int rst = rstarray[2].ToInt();
 
 			auto it = m_pattern.find(pattern);
 			if (it != m_pattern.end())
@@ -543,7 +543,7 @@ int RedisSync::Publish(const std::string& channel, const std::string& msg)
 	}
 	if (rst.IsInt())
 	{
-		return rst.Toint();
+		return rst.ToInt();
 	}
 	RedisLogError("UnKnown Error");
 	return -1;

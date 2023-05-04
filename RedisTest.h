@@ -41,7 +41,7 @@ void RedisTest_Sync(RedisSync& redis)
 	if (redis.Move("__test_key__", index) != 1) { RedisLogError("Move"); return; }
 	if (!redis.DoCommand(RedisCommand("SELECT", index))) { RedisLogError("SELECT"); return; }
 
-	long long expire = 0;
+	int64_t expire = 0;
 	if (redis.TTL("__test_key__", expire) != 1 || expire != -1) { RedisLogError("TTL"); return; }
 	if (redis.Expire("__test_key__", 10000) != 1) { RedisLogError("Expire"); return; }
 	if (redis.PTTL("__test_key__", expire) != 1 || expire <= 0) { RedisLogError("PTTL"); return; }
@@ -72,11 +72,11 @@ void RedisTest_Sync(RedisSync& redis)
 
 	// 字符串命令
 	redis.Del("__test_string__");
-	long long rst = 0;
+	int64_t rst = 0;
 	if (redis.Set("__test_string__", 9527) != 1) { RedisLogError("Set"); return; }
 	if (redis.Get("__test_string__", rst) != 1 || rst != 9527) { RedisLogError("Get"); return; }
 	if (redis.Incr("__test_string__", rst) != 1 || rst != 9528) { RedisLogError("Incr"); return; }
-	if (redis.Incrby("__test_string__", (long long)2, rst) != 1 || rst != 9530) { RedisLogError("Incrby"); return; }
+	if (redis.Incrby("__test_string__", (int64_t)2, rst) != 1 || rst != 9530) { RedisLogError("Incrby"); return; }
 	if (redis.Exists("__test_string__") != 1) { RedisLogError("Exists"); return; }
 	redis.Del("__test_string__");
 
@@ -94,7 +94,7 @@ void RedisTest_Sync(RedisSync& redis)
 	if (redis.HExists("__test_hset__", "f") != 1) { RedisLogError("HExists"); return; }
 	rst = 0;
 	if (redis.HGet("__test_hset__", "f", rst) != 1 || rst != 9527) { RedisLogError("HGet"); return; }
-	if (redis.HIncrby("__test_hset__", "f", (long long)3, rst) != 1 || rst != 9530) { RedisLogError("HIncrby"); return; }
+	if (redis.HIncrby("__test_hset__", "f", (int64_t)3, rst) != 1 || rst != 9530) { RedisLogError("HIncrby"); return; }
 	if (redis.HExists("__test_hset__", "f") != 1) { RedisLogError("HExists"); return; }
 	if (redis.HDel("__test_hset__", "f") != 1) { RedisLogError("HDel"); return; }
 	redis.Del("__test_hset__");
@@ -223,7 +223,7 @@ void RedisTest_Pipeline(RedisSync& redis)
 	bdo = pipeline.Do();
 	if (!bdo) { RedisLogError("SELECT"); return; }
 
-	long long expire = 0;
+	int64_t expire = 0;
 	pipeline.TTL("__test_string__").Bind(expire);
 	bdo = pipeline.Do();
 	if (!bdo || expire != -1) { RedisLogError("TTL"); return; }
@@ -272,7 +272,7 @@ void RedisTest_Pipeline(RedisSync& redis)
 	if (!bdo || ibind != 1) { RedisLogError("Del"); return; }
 
 	// 字符串命令
-	long long rst = 0;
+	int64_t rst = 0;
 	pipeline.Set("__test_string__", 9527).Bind(strbind); strbind = "";
 	bdo = pipeline.Do();
 	if (!bdo || strbind != "OK") { RedisLogError("Set"); return; }
